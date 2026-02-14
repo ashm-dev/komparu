@@ -61,6 +61,8 @@ set(KOMPARU_CORE_SOURCES
     src/_core/reader_archive.c
     src/_core/dirwalk.c
     src/_core/pool.c
+    src/_core/async_task.c
+    src/_core/async_curl.c
 )
 
 python_add_library(_core MODULE ${KOMPARU_CORE_SOURCES})
