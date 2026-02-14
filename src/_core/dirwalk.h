@@ -48,6 +48,7 @@ void komparu_pathlist_free(komparu_pathlist_t *list);
  *
  * Walks both directories, merge-compares sorted path lists,
  * opens file readers and uses komparu_compare for each common entry.
+ * If max_workers > 1, file comparisons run in parallel.
  *
  * Returns allocated dir_result_t on success, NULL on error.
  * Caller must free with komparu_dir_result_free().
@@ -59,6 +60,7 @@ komparu_dir_result_t *komparu_compare_dirs(
     bool size_precheck,
     bool quick_check,
     bool follow_symlinks,
+    size_t max_workers,
     const char **err_msg
 );
 

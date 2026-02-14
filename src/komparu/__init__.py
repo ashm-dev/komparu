@@ -141,6 +141,7 @@ def compare_dir(
     size_precheck: bool | None = None,
     quick_check: bool | None = None,
     follow_symlinks: bool = True,
+    max_workers: int | None = None,
 ) -> DirResult:
     """Compare two directories recursively.
 
@@ -150,12 +151,14 @@ def compare_dir(
     :param size_precheck: Compare file sizes before content.
     :param quick_check: Sample first/last/middle before full scan.
     :param follow_symlinks: Follow symbolic links during traversal.
+    :param max_workers: Thread pool size (0=auto, 1=sequential).
     :returns: DirResult with equal, diff, only_left, only_right.
     """
     cfg = get_config()
     cs = chunk_size if chunk_size is not None else cfg.chunk_size
     sp = size_precheck if size_precheck is not None else cfg.size_precheck
     qc = quick_check if quick_check is not None else cfg.quick_check
+    mw = max_workers if max_workers is not None else cfg.max_workers
 
     raw = _compare_dir_c(
         dir_a, dir_b,
@@ -163,6 +166,7 @@ def compare_dir(
         size_precheck=sp,
         quick_check=qc,
         follow_symlinks=follow_symlinks,
+        max_workers=mw,
     )
     return _build_dir_result(raw)
 
@@ -206,11 +210,239 @@ def compare_archive(
     return _build_dir_result(raw)
 
 
+def compare_all(
+    sources: list[str | Source],
+    *,
+    chunk_size: int | None = None,
+    size_precheck: bool | None = None,
+    quick_check: bool | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: float | None = None,
+    follow_redirects: bool | None = None,
+    verify_ssl: bool | None = None,
+    max_workers: int | None = None,
+) -> bool:
+    """Check if all sources are byte-identical.
+
+    Compares source[0] against all others in parallel.
+
+    :param sources: List of file paths, URLs, or Source objects.
+    :param max_workers: Thread pool size (0=auto, 1=sequential).
+    :returns: True if all sources are identical.
+    """
+    if len(sources) < 2:
+        return True
+
+    cfg = get_config()
+    mw = max_workers if max_workers is not None else cfg.max_workers
+
+    kwargs = {
+        "chunk_size": chunk_size,
+        "size_precheck": size_precheck,
+        "quick_check": quick_check,
+        "headers": headers,
+        "timeout": timeout,
+        "follow_redirects": follow_redirects,
+        "verify_ssl": verify_ssl,
+    }
+    # Remove None values to use defaults
+    kwargs = {k: v for k, v in kwargs.items() if v is not None}
+
+    ref = sources[0]
+    others = sources[1:]
+
+    if mw == 1 or len(others) == 1:
+        return all(compare(ref, s, **kwargs) for s in others)
+
+    from concurrent.futures import ThreadPoolExecutor
+
+    pool_size = mw if mw > 0 else min(len(others), (cfg.max_workers or 8))
+    with ThreadPoolExecutor(max_workers=pool_size) as pool:
+        futures = [pool.submit(compare, ref, s, **kwargs) for s in others]
+        return all(f.result() for f in futures)
+
+
+def compare_many(
+    sources: list[str | Source],
+    *,
+    chunk_size: int | None = None,
+    size_precheck: bool | None = None,
+    quick_check: bool | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: float | None = None,
+    follow_redirects: bool | None = None,
+    verify_ssl: bool | None = None,
+    max_workers: int | None = None,
+) -> CompareResult:
+    """Detailed pairwise comparison of multiple sources.
+
+    :param sources: List of file paths, URLs, or Source objects.
+    :param max_workers: Thread pool size (0=auto, 1=sequential).
+    :returns: CompareResult with all_equal, groups, diff.
+    """
+    cfg = get_config()
+    mw = max_workers if max_workers is not None else cfg.max_workers
+
+    kwargs = {
+        "chunk_size": chunk_size,
+        "size_precheck": size_precheck,
+        "quick_check": quick_check,
+        "headers": headers,
+        "timeout": timeout,
+        "follow_redirects": follow_redirects,
+        "verify_ssl": verify_ssl,
+    }
+    kwargs = {k: v for k, v in kwargs.items() if v is not None}
+
+    n = len(sources)
+    if n < 2:
+        names = [s.url if isinstance(s, Source) else s for s in sources]
+        return CompareResult(all_equal=True, groups=[set(names)], diff={})
+
+    # Generate all pairs
+    pairs: list[tuple[int, int]] = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            pairs.append((i, j))
+
+    def _cmp_pair(pair: tuple[int, int]) -> tuple[int, int, bool]:
+        i, j = pair
+        return i, j, compare(sources[i], sources[j], **kwargs)
+
+    if mw == 1 or len(pairs) == 1:
+        results = [_cmp_pair(p) for p in pairs]
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+
+        pool_size = mw if mw > 0 else min(len(pairs), (cfg.max_workers or 8))
+        with ThreadPoolExecutor(max_workers=pool_size) as pool:
+            results = list(pool.map(_cmp_pair, pairs))
+
+    # Build diff dict
+    names = [s.url if isinstance(s, Source) else s for s in sources]
+    diff: dict[tuple[str, str], bool] = {}
+    for i, j, eq in results:
+        diff[(names[i], names[j])] = eq
+
+    all_equal = all(eq for _, _, eq in results)
+
+    # Build groups via union-find
+    parent = list(range(n))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(x: int, y: int) -> None:
+        px, py = find(x), find(y)
+        if px != py:
+            parent[px] = py
+
+    for i, j, eq in results:
+        if eq:
+            union(i, j)
+
+    group_map: dict[int, set[str]] = {}
+    for i in range(n):
+        root = find(i)
+        if root not in group_map:
+            group_map[root] = set()
+        group_map[root].add(names[i])
+
+    return CompareResult(
+        all_equal=all_equal,
+        groups=list(group_map.values()),
+        diff=diff,
+    )
+
+
+def compare_dir_urls(
+    dir_path: str,
+    url_map: dict[str, str],
+    *,
+    chunk_size: int | None = None,
+    size_precheck: bool | None = None,
+    quick_check: bool | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: float | None = None,
+    follow_redirects: bool | None = None,
+    verify_ssl: bool | None = None,
+    max_workers: int | None = None,
+) -> DirResult:
+    """Compare directory files against URL mapping.
+
+    :param dir_path: Path to local directory.
+    :param url_map: Mapping of relative_path -> URL.
+    :param max_workers: Thread pool size (0=auto, 1=sequential).
+    :returns: DirResult with equal, diff, only_left, only_right.
+    """
+    import os
+
+    cfg = get_config()
+    mw = max_workers if max_workers is not None else cfg.max_workers
+
+    kwargs = {
+        "chunk_size": chunk_size,
+        "size_precheck": size_precheck,
+        "quick_check": quick_check,
+        "headers": headers,
+        "timeout": timeout,
+        "follow_redirects": follow_redirects,
+        "verify_ssl": verify_ssl,
+    }
+    kwargs = {k: v for k, v in kwargs.items() if v is not None}
+
+    # Walk local directory for relative paths
+    local_files: set[str] = set()
+    for root, _dirs, files in os.walk(dir_path):
+        for f in files:
+            rel = os.path.relpath(os.path.join(root, f), dir_path)
+            local_files.add(rel)
+
+    url_keys = set(url_map.keys())
+    only_left = local_files - url_keys
+    only_right = url_keys - local_files
+    common = local_files & url_keys
+
+    diff: dict[str, DiffReason] = {}
+
+    if common:
+        def _cmp_entry(rel: str) -> tuple[str, bool]:
+            local_path = os.path.join(dir_path, rel)
+            return rel, compare(local_path, url_map[rel], **kwargs)
+
+        if mw == 1 or len(common) == 1:
+            results = [_cmp_entry(r) for r in sorted(common)]
+        else:
+            from concurrent.futures import ThreadPoolExecutor
+
+            pool_size = mw if mw > 0 else min(len(common), (cfg.max_workers or 8))
+            with ThreadPoolExecutor(max_workers=pool_size) as pool:
+                results = list(pool.map(_cmp_entry, sorted(common)))
+
+        for rel, eq in results:
+            if not eq:
+                diff[rel] = DiffReason.CONTENT_MISMATCH
+
+    equal = len(only_left) == 0 and len(only_right) == 0 and len(diff) == 0
+    return DirResult(
+        equal=equal,
+        diff=diff,
+        only_left=only_left,
+        only_right=only_right,
+    )
+
+
 __all__ = [
     "__version__",
     "compare",
     "compare_dir",
     "compare_archive",
+    "compare_all",
+    "compare_many",
+    "compare_dir_urls",
     "configure",
     "get_config",
     "reset_config",

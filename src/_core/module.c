@@ -381,15 +381,16 @@ static PyObject *py_compare_dir(PyObject *self, PyObject *args, PyObject *kwargs
     int size_precheck = 1;
     int quick_check = 1;
     int follow_symlinks = 1;
+    Py_ssize_t max_workers = 0;  /* 0 = auto */
 
     static char *kwlist[] = {
         "dir_a", "dir_b", "chunk_size", "size_precheck",
-        "quick_check", "follow_symlinks", NULL
+        "quick_check", "follow_symlinks", "max_workers", NULL
     };
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ss|nppp", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ss|npppn", kwlist,
             &dir_a, &dir_b, &chunk_size, &size_precheck,
-            &quick_check, &follow_symlinks)) {
+            &quick_check, &follow_symlinks, &max_workers)) {
         return NULL;
     }
 
@@ -416,6 +417,7 @@ static PyObject *py_compare_dir(PyObject *self, PyObject *args, PyObject *kwargs
     result = komparu_compare_dirs(da, db,
         (size_t)chunk_size, (bool)size_precheck,
         (bool)quick_check, (bool)follow_symlinks,
+        (size_t)(max_workers >= 0 ? max_workers : 0),
         &err_msg);
 
     KOMPARU_GIL_ACQUIRE()

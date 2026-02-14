@@ -4,11 +4,15 @@
  * Uses openat/fstatat/fdopendir for optimal performance (avoids
  * full path resolution on each stat). Produces sorted pathlist
  * for deterministic merge-comparison.
+ *
+ * Parallel mode: when max_workers > 1, file comparisons are
+ * submitted to a thread pool. Each task is independent (own readers).
  */
 
 #include "dirwalk.h"
 #include "compare.h"
 #include "reader_file.h"
+#include "pool.h"
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -152,6 +156,75 @@ int komparu_dirwalk(
 }
 
 /* =========================================================================
+ * Per-file comparison task (used by both sequential and parallel paths)
+ * ========================================================================= */
+
+typedef struct {
+    char *full_path_a;
+    char *full_path_b;
+    char *rel_path;
+    size_t chunk_size;
+    bool size_precheck;
+    bool quick_check;
+    int result_reason;  /* -1 = equal, else KOMPARU_DIFF_* */
+} dir_cmp_task_t;
+
+static void dir_cmp_task_exec(void *arg) {
+    dir_cmp_task_t *task = (dir_cmp_task_t *)arg;
+    task->result_reason = -1;  /* assume equal */
+
+    const char *cmp_err = NULL;
+    komparu_reader_t *ra = komparu_reader_file_open(task->full_path_a, &cmp_err);
+    if (KOMPARU_UNLIKELY(!ra)) {
+        task->result_reason = KOMPARU_DIFF_READ_ERROR;
+        return;
+    }
+
+    komparu_reader_t *rb = komparu_reader_file_open(task->full_path_b, &cmp_err);
+    if (KOMPARU_UNLIKELY(!rb)) {
+        ra->close(ra);
+        task->result_reason = KOMPARU_DIFF_READ_ERROR;
+        return;
+    }
+
+    /* Size pre-check */
+    if (task->size_precheck) {
+        int64_t sa = ra->get_size(ra);
+        int64_t sb = rb->get_size(rb);
+        if (sa >= 0 && sb >= 0 && sa != sb) {
+            ra->close(ra);
+            rb->close(rb);
+            task->result_reason = KOMPARU_DIFF_SIZE;
+            return;
+        }
+    }
+
+    /* Quick check */
+    if (task->quick_check) {
+        komparu_result_t qr = komparu_quick_check(ra, rb, task->chunk_size, &cmp_err);
+        if (qr == KOMPARU_DIFFERENT) {
+            ra->close(ra);
+            rb->close(rb);
+            task->result_reason = KOMPARU_DIFF_CONTENT;
+            return;
+        }
+        if (qr == KOMPARU_ERROR && ra->seek && rb->seek) {
+            ra->seek(ra, 0);
+            rb->seek(rb, 0);
+        }
+    }
+
+    komparu_result_t cr = komparu_compare(ra, rb, task->chunk_size, false, &cmp_err);
+    ra->close(ra);
+    rb->close(rb);
+
+    if (cr == KOMPARU_DIFFERENT)
+        task->result_reason = KOMPARU_DIFF_CONTENT;
+    else if (cr == KOMPARU_ERROR)
+        task->result_reason = KOMPARU_DIFF_READ_ERROR;
+}
+
+/* =========================================================================
  * Directory comparison — sorted merge of two directory trees
  * ========================================================================= */
 
@@ -162,6 +235,7 @@ komparu_dir_result_t *komparu_compare_dirs(
     bool size_precheck,
     bool quick_check,
     bool follow_symlinks,
+    size_t max_workers,
     const char **err_msg
 ) {
     komparu_pathlist_t paths_a = {0};
@@ -186,120 +260,71 @@ komparu_dir_result_t *komparu_compare_dirs(
 
     if (chunk_size == 0) chunk_size = KOMPARU_DEFAULT_CHUNK_SIZE;
 
-    /* Sorted merge */
+    /* Phase 1: Sorted merge — identify only_left, only_right, common files */
+    dir_cmp_task_t *tasks = NULL;
+    size_t task_count = 0;
+    size_t task_cap = 0;
+
     size_t i = 0, j = 0;
     while (i < paths_a.count && j < paths_b.count) {
         int cmp = strcmp(paths_a.paths[i], paths_b.paths[j]);
 
         if (cmp < 0) {
-            /* Only in dir_a */
             if (KOMPARU_UNLIKELY(komparu_dir_result_add_only_left(result, paths_a.paths[i]) != 0)) {
                 *err_msg = "out of memory";
                 goto fail;
             }
             i++;
         } else if (cmp > 0) {
-            /* Only in dir_b */
             if (KOMPARU_UNLIKELY(komparu_dir_result_add_only_right(result, paths_b.paths[j]) != 0)) {
                 *err_msg = "out of memory";
                 goto fail;
             }
             j++;
         } else {
-            /* Same relative path — compare files */
-            char path_a[PATH_MAX], path_b[PATH_MAX];
-            int la = snprintf(path_a, sizeof(path_a), "%s/%s", dir_a, paths_a.paths[i]);
-            int lb = snprintf(path_b, sizeof(path_b), "%s/%s", dir_b, paths_b.paths[j]);
-            if (KOMPARU_UNLIKELY(la < 0 || (size_t)la >= sizeof(path_a) ||
-                                 lb < 0 || (size_t)lb >= sizeof(path_b))) {
-                if (KOMPARU_UNLIKELY(komparu_dir_result_add_diff(result, paths_a.paths[i], KOMPARU_DIFF_READ_ERROR) != 0)) {
+            /* Common entry — build task */
+            if (task_count >= task_cap) {
+                size_t new_cap = task_cap ? task_cap * 2 : 128;
+                dir_cmp_task_t *tmp = realloc(tasks, new_cap * sizeof(dir_cmp_task_t));
+                if (KOMPARU_UNLIKELY(!tmp)) {
                     *err_msg = "out of memory";
                     goto fail;
                 }
-                i++; j++;
-                continue;
+                tasks = tmp;
+                task_cap = new_cap;
             }
 
-            const char *cmp_err = NULL;
-            komparu_reader_t *ra = komparu_reader_file_open(path_a, &cmp_err);
-            if (KOMPARU_UNLIKELY(!ra)) {
-                if (KOMPARU_UNLIKELY(komparu_dir_result_add_diff(result, paths_a.paths[i], KOMPARU_DIFF_READ_ERROR) != 0)) {
-                    *err_msg = "out of memory";
-                    goto fail;
-                }
-                i++; j++;
-                continue;
+            dir_cmp_task_t *t = &tasks[task_count];
+            memset(t, 0, sizeof(*t));
+
+            /* Build full paths */
+            size_t la = strlen(dir_a) + 1 + strlen(paths_a.paths[i]) + 1;
+            size_t lb = strlen(dir_b) + 1 + strlen(paths_b.paths[j]) + 1;
+
+            t->full_path_a = malloc(la);
+            t->full_path_b = malloc(lb);
+            t->rel_path = strdup(paths_a.paths[i]);
+
+            if (KOMPARU_UNLIKELY(!t->full_path_a || !t->full_path_b || !t->rel_path)) {
+                free(t->full_path_a);
+                free(t->full_path_b);
+                free(t->rel_path);
+                *err_msg = "out of memory";
+                goto fail;
             }
 
-            komparu_reader_t *rb = komparu_reader_file_open(path_b, &cmp_err);
-            if (KOMPARU_UNLIKELY(!rb)) {
-                ra->close(ra);
-                if (KOMPARU_UNLIKELY(komparu_dir_result_add_diff(result, paths_a.paths[i], KOMPARU_DIFF_READ_ERROR) != 0)) {
-                    *err_msg = "out of memory";
-                    goto fail;
-                }
-                i++; j++;
-                continue;
-            }
+            snprintf(t->full_path_a, la, "%s/%s", dir_a, paths_a.paths[i]);
+            snprintf(t->full_path_b, lb, "%s/%s", dir_b, paths_b.paths[j]);
+            t->chunk_size = chunk_size;
+            t->size_precheck = size_precheck;
+            t->quick_check = quick_check;
+            t->result_reason = -1;
 
-            /* Size pre-check fast path */
-            if (size_precheck) {
-                int64_t sa = ra->get_size(ra);
-                int64_t sb = rb->get_size(rb);
-                if (sa >= 0 && sb >= 0 && sa != sb) {
-                    ra->close(ra);
-                    rb->close(rb);
-                    if (KOMPARU_UNLIKELY(komparu_dir_result_add_diff(result, paths_a.paths[i], KOMPARU_DIFF_SIZE) != 0)) {
-                        *err_msg = "out of memory";
-                        goto fail;
-                    }
-                    i++; j++;
-                    continue;
-                }
-            }
-
-            /* Quick check */
-            if (quick_check) {
-                komparu_result_t qr = komparu_quick_check(ra, rb, chunk_size, &cmp_err);
-                if (qr == KOMPARU_DIFFERENT) {
-                    ra->close(ra);
-                    rb->close(rb);
-                    if (KOMPARU_UNLIKELY(komparu_dir_result_add_diff(result, paths_a.paths[i], KOMPARU_DIFF_CONTENT) != 0)) {
-                        *err_msg = "out of memory";
-                        goto fail;
-                    }
-                    i++; j++;
-                    continue;
-                }
-                /* EQUAL from quick_check → still need full compare */
-                /* ERROR → seek back to start before full compare */
-                if (qr == KOMPARU_ERROR && ra->seek && rb->seek) {
-                    ra->seek(ra, 0);
-                    rb->seek(rb, 0);
-                }
-            }
-
-            komparu_result_t cr = komparu_compare(ra, rb, chunk_size, false, &cmp_err);
-            ra->close(ra);
-            rb->close(rb);
-
-            if (cr == KOMPARU_DIFFERENT) {
-                if (KOMPARU_UNLIKELY(komparu_dir_result_add_diff(result, paths_a.paths[i], KOMPARU_DIFF_CONTENT) != 0)) {
-                    *err_msg = "out of memory";
-                    goto fail;
-                }
-            } else if (cr == KOMPARU_ERROR) {
-                if (KOMPARU_UNLIKELY(komparu_dir_result_add_diff(result, paths_a.paths[i], KOMPARU_DIFF_READ_ERROR) != 0)) {
-                    *err_msg = "out of memory";
-                    goto fail;
-                }
-            }
-
+            task_count++;
             i++; j++;
         }
     }
 
-    /* Remaining entries in dir_a only */
     while (i < paths_a.count) {
         if (KOMPARU_UNLIKELY(komparu_dir_result_add_only_left(result, paths_a.paths[i]) != 0)) {
             *err_msg = "out of memory";
@@ -308,7 +333,6 @@ komparu_dir_result_t *komparu_compare_dirs(
         i++;
     }
 
-    /* Remaining entries in dir_b only */
     while (j < paths_b.count) {
         if (KOMPARU_UNLIKELY(komparu_dir_result_add_only_right(result, paths_b.paths[j]) != 0)) {
             *err_msg = "out of memory";
@@ -317,11 +341,57 @@ komparu_dir_result_t *komparu_compare_dirs(
         j++;
     }
 
+    /* Phase 2: Execute file comparisons */
+    if (task_count > 0) {
+        bool use_pool = (max_workers != 1 && task_count > 1);
+        komparu_pool_t *pool = NULL;
+
+        if (use_pool) {
+            pool = komparu_pool_create(max_workers);
+            /* Fall back to sequential if pool creation fails */
+        }
+
+        if (pool) {
+            for (size_t k = 0; k < task_count; k++) {
+                komparu_pool_submit(pool, dir_cmp_task_exec, &tasks[k]);
+            }
+            komparu_pool_wait(pool);
+            komparu_pool_destroy(pool);
+        } else {
+            for (size_t k = 0; k < task_count; k++) {
+                dir_cmp_task_exec(&tasks[k]);
+            }
+        }
+
+        /* Phase 3: Collect results */
+        for (size_t k = 0; k < task_count; k++) {
+            if (tasks[k].result_reason >= 0) {
+                if (KOMPARU_UNLIKELY(komparu_dir_result_add_diff(result, tasks[k].rel_path, tasks[k].result_reason) != 0)) {
+                    *err_msg = "out of memory";
+                    goto fail;
+                }
+            }
+        }
+    }
+
+    /* Cleanup */
+    for (size_t k = 0; k < task_count; k++) {
+        free(tasks[k].full_path_a);
+        free(tasks[k].full_path_b);
+        free(tasks[k].rel_path);
+    }
+    free(tasks);
     komparu_pathlist_free(&paths_a);
     komparu_pathlist_free(&paths_b);
     return result;
 
 fail:
+    for (size_t k = 0; k < task_count; k++) {
+        free(tasks[k].full_path_a);
+        free(tasks[k].full_path_b);
+        free(tasks[k].rel_path);
+    }
+    free(tasks);
     komparu_pathlist_free(&paths_a);
     komparu_pathlist_free(&paths_b);
     komparu_dir_result_free(result);
