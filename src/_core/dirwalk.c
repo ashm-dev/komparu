@@ -353,7 +353,15 @@ komparu_dir_result_t *komparu_compare_dirs(
 
         if (pool) {
             for (size_t k = 0; k < task_count; k++) {
-                komparu_pool_submit(pool, dir_cmp_task_exec, &tasks[k]);
+                if (KOMPARU_UNLIKELY(komparu_pool_submit(pool, dir_cmp_task_exec, &tasks[k]) != 0)) {
+                    /* Submit failed — execute remaining tasks inline */
+                    komparu_pool_wait(pool);
+                    komparu_pool_destroy(pool);
+                    for (size_t m = k; m < task_count; m++)
+                        dir_cmp_task_exec(&tasks[m]);
+                    pool = NULL;
+                    break;
+                }
             }
             komparu_pool_wait(pool);
             komparu_pool_destroy(pool);
