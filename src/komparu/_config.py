@@ -65,10 +65,12 @@ def configure(**kwargs) -> None:
     :param allow_private_redirects: Allow redirects to private networks.
     """
     global _config
-    for key, value in kwargs.items():
+    # Validate all keys first to avoid partial updates
+    for key in kwargs:
         if not hasattr(_config, key):
             from komparu._types import ConfigError
             raise ConfigError(f"unknown config option: {key!r}")
+    for key, value in kwargs.items():
         setattr(_config, key, value)
 
 

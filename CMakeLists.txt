@@ -101,6 +101,11 @@ if(WIN32)
         WIN32_LEAN_AND_MEAN
         NOMINMAX
     )
+else()
+    # Ensure 64-bit file offsets on 32-bit Linux
+    target_compile_definitions(_core PRIVATE
+        _FILE_OFFSET_BITS=64
+    )
 endif()
 
 if(APPLE)

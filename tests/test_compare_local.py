@@ -148,6 +148,40 @@ class TestCompareEdgeCases:
         b = make_file("b.bin", content)
         assert komparu.compare(str(a), str(b)) is True
 
+    def test_source_is_directory(self, tmp_dir):
+        """Directories must be rejected, not compared as empty files."""
+        d = tmp_dir / "subdir"
+        d.mkdir()
+        f = tmp_dir / "file.txt"
+        f.write_bytes(b"data")
+        with pytest.raises((IsADirectoryError, IOError, FileNotFoundError)):
+            komparu.compare(str(d), str(f))
+
+    def test_permission_denied(self, make_file):
+        a = make_file("a.txt", b"data")
+        b = make_file("b.txt", b"data")
+        os.chmod(str(b), 0o000)
+        try:
+            with pytest.raises((PermissionError, IOError, FileNotFoundError)):
+                komparu.compare(str(a), str(b))
+        finally:
+            os.chmod(str(b), 0o644)
+
+    def test_symlink_to_file(self, make_file, tmp_dir):
+        """Symlinks should be followed transparently."""
+        a = make_file("a.txt", b"symlink_data")
+        link = tmp_dir / "link.txt"
+        link.symlink_to(a)
+        assert komparu.compare(str(a), str(link)) is True
+
+    def test_broken_symlink(self, tmp_dir):
+        link = tmp_dir / "broken_link"
+        link.symlink_to(tmp_dir / "nonexistent_target")
+        f = tmp_dir / "file.txt"
+        f.write_bytes(b"data")
+        with pytest.raises(FileNotFoundError):
+            komparu.compare(str(link), str(f))
+
 
 class TestCompareOptions:
     """Test comparison options."""

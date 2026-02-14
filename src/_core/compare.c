@@ -187,8 +187,11 @@ komparu_result_t komparu_quick_check(
 
     /* Reset readers to start for subsequent full comparison */
     if (result == KOMPARU_EQUAL && reader_a->seek && reader_b->seek) {
-        reader_a->seek(reader_a, 0);
-        reader_b->seek(reader_b, 0);
+        if (reader_a->seek(reader_a, 0) != 0 ||
+            reader_b->seek(reader_b, 0) != 0) {
+            *err_msg = "seek to start failed after quick check";
+            return KOMPARU_ERROR;
+        }
     }
 
     return result;

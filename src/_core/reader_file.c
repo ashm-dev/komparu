@@ -11,6 +11,9 @@
 #include <stdlib.h>
 #include <errno.h>
 
+/* Thread-safe error message buffer */
+static _Thread_local char komparu_errbuf[256];
+
 /* =========================================================================
  * SIGBUS protection (Unix only)
  * ========================================================================= */
@@ -34,16 +37,14 @@ static void sigbus_handler(int sig, siginfo_t *info, void *ucontext) {
     (void)ucontext;
 
     if (sigbus_armed) {
+        int saved_errno = errno;
         sigbus_armed = 0;
+        errno = saved_errno;
         siglongjmp(sigbus_jmpbuf, 1);
     }
 
-    /* Not armed — restore default and re-raise */
-    struct sigaction sa;
-    sa.sa_handler = SIG_DFL;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
-    sigaction(SIGBUS, &sa, NULL);
+    /* Not armed — this is a real crash. Restore default and re-raise. */
+    signal(SIGBUS, SIG_DFL);
     raise(sig);
 }
 
@@ -171,13 +172,22 @@ static void file_close_fallback(komparu_reader_t *self) {
 komparu_reader_t *komparu_reader_file_open(const char *path, const char **err_msg) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
-        *err_msg = strerror(errno);
+        strerror_r(errno, komparu_errbuf, sizeof(komparu_errbuf));
+        *err_msg = komparu_errbuf;
         return NULL;
     }
 
     struct stat st;
     if (fstat(fd, &st) != 0) {
-        *err_msg = strerror(errno);
+        strerror_r(errno, komparu_errbuf, sizeof(komparu_errbuf));
+        *err_msg = komparu_errbuf;
+        close(fd);
+        return NULL;
+    }
+
+    /* Reject non-regular files (directories, devices, pipes, sockets) */
+    if (!S_ISREG(st.st_mode)) {
+        *err_msg = "not a regular file";
         close(fd);
         return NULL;
     }
