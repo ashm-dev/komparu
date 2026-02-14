@@ -110,6 +110,7 @@ typedef struct {
     char *buf;          /* User-provided buffer */
     size_t buf_size;    /* Total buffer capacity */
     size_t written;     /* Bytes written so far */
+    bool overflow;      /* Server sent more data than buffer capacity */
 } write_ctx_t;
 
 static size_t write_callback(void *contents, size_t size, size_t nmemb, void *userp) {
@@ -117,14 +118,19 @@ static size_t write_callback(void *contents, size_t size, size_t nmemb, void *us
     write_ctx_t *wctx = (write_ctx_t *)userp;
 
     size_t remaining = wctx->buf_size - wctx->written;
-    size_t to_copy = (total <= remaining) ? total : remaining;
 
-    if (to_copy > 0) {
-        memcpy(wctx->buf + wctx->written, contents, to_copy);
-        wctx->written += to_copy;
+    if (total > remaining) {
+        /* Server sent more data than requested — Range was ignored */
+        if (remaining > 0) {
+            memcpy(wctx->buf + wctx->written, contents, remaining);
+            wctx->written += remaining;
+        }
+        wctx->overflow = true;
+        return total;  /* Keep curl happy */
     }
 
-    /* Always report full consumption to curl to avoid CURLE_WRITE_ERROR */
+    memcpy(wctx->buf + wctx->written, contents, total);
+    wctx->written += total;
     return total;
 }
 
@@ -139,19 +145,17 @@ static size_t discard_callback(void *contents, size_t size, size_t nmemb, void *
 static size_t head_header_callback(char *buffer, size_t size, size_t nitems, void *userp) {
     size_t total = size * nitems;
     bool *range_flag = (bool *)userp;
+    const char *end = buffer + total;
 
-    /* Check for "Accept-Ranges: bytes" (case-insensitive) */
-    if (total >= 22) {  /* strlen("Accept-Ranges: bytes") = 22 */
-        /* Match header name case-insensitively */
-        if ((buffer[0] == 'A' || buffer[0] == 'a') &&
-            (buffer[1] == 'c' || buffer[1] == 'C') &&
-            strncasecmp(buffer, "Accept-Ranges:", 14) == 0) {
-            /* Skip whitespace after colon */
-            const char *val = buffer + 14;
-            while (*val == ' ' || *val == '\t') val++;
-            if (strncasecmp(val, "bytes", 5) == 0) {
-                *range_flag = true;
-            }
+    /* Need at least "Accept-Ranges: bytes" (20 chars + CRLF) */
+    if (total >= 22 &&
+        (buffer[0] == 'A' || buffer[0] == 'a') &&
+        (buffer[1] == 'c' || buffer[1] == 'C') &&
+        strncasecmp(buffer, "Accept-Ranges:", 14) == 0) {
+        const char *val = buffer + 14;
+        while (val < end && (*val == ' ' || *val == '\t')) val++;
+        if (val + 5 <= end && strncasecmp(val, "bytes", 5) == 0) {
+            *range_flag = true;
         }
     }
 
@@ -210,6 +214,13 @@ static int64_t http_read(komparu_reader_t *self, void *buf, size_t size) {
         return 0;
     }
 
+    /* Guard: non-Range server can only do one full GET from offset 0 */
+    if (!ctx->range_supported && ctx->offset > 0) {
+        snprintf(http_errbuf, sizeof(http_errbuf),
+                 "server does not support Range requests");
+        return -1;
+    }
+
     /* Clamp read size to remaining bytes if size known */
     if (ctx->file_size >= 0) {
         int64_t remaining = ctx->file_size - ctx->offset;
@@ -223,6 +234,7 @@ static int64_t http_read(komparu_reader_t *self, void *buf, size_t size) {
         .buf = (char *)buf,
         .buf_size = size,
         .written = 0,
+        .overflow = false,
     };
 
     curl_easy_setopt(ctx->easy, CURLOPT_NOBODY, 0L);

@@ -56,6 +56,13 @@ static const char **build_header_array(
             *err_msg = "header keys and values must be strings";
             return NULL;
         }
+        /* Reject CRLF in headers to prevent header injection */
+        if (strpbrk(k, "\r\n") || strpbrk(v, "\r\n")) {
+            for (size_t j = 0; j < idx; j++) free((void *)arr[j]);
+            free(arr);
+            *err_msg = "header keys/values must not contain CR/LF";
+            return NULL;
+        }
         size_t len = strlen(k) + strlen(v) + 3;
         char *hdr = malloc(len);
         if (!hdr) {
