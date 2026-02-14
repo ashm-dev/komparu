@@ -211,7 +211,11 @@ static PyObject *py_compare(PyObject *self, PyObject *args, PyObject *kwargs) {
             goto done;
         }
         /* EQUAL from quick_check = samples match, still need full compare */
-        /* ERROR = seek not supported, fall through to full compare */
+        /* ERROR = seek not supported — reset to start before full compare */
+        if (result == KOMPARU_ERROR && reader_a->seek && reader_b->seek) {
+            reader_a->seek(reader_a, 0);
+            reader_b->seek(reader_b, 0);
+        }
     }
 
     result = komparu_compare(reader_a, reader_b,

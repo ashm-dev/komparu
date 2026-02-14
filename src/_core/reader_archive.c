@@ -150,6 +150,12 @@ static int read_archive_entries(
 ) {
     memset(out, 0, sizeof(*out));
 
+    /* Apply defaults when limits are disabled (0 or negative) */
+    if (max_decompressed_size <= 0) max_decompressed_size = DEFAULT_MAX_DECOMPRESSED;
+    if (max_compression_ratio <= 0) max_compression_ratio = DEFAULT_MAX_RATIO;
+    if (max_entries <= 0)           max_entries = DEFAULT_MAX_ENTRIES;
+    if (max_entry_name_length <= 0) max_entry_name_length = DEFAULT_MAX_NAME_LENGTH;
+
     struct archive *a = archive_read_new();
     if (!a) {
         *err_msg = "failed to create archive reader";
@@ -183,7 +189,7 @@ static int read_archive_entries(
         entry_count++;
 
         /* Bomb check: max entries */
-        if (max_entries > 0 && entry_count > max_entries) {
+        if (entry_count > max_entries) {
             snprintf(archive_errbuf, sizeof(archive_errbuf),
                      "archive bomb: too many entries (>%lld)", (long long)max_entries);
             *err_msg = archive_errbuf;
@@ -198,7 +204,7 @@ static int read_archive_entries(
 
         /* Bomb check: entry name length */
         size_t name_len = strlen(raw_name);
-        if (max_entry_name_length > 0 && (int64_t)name_len > max_entry_name_length) {
+        if ((int64_t)name_len > max_entry_name_length) {
             snprintf(archive_errbuf, sizeof(archive_errbuf),
                      "archive bomb: entry name too long (%zu > %lld)",
                      name_len, (long long)max_entry_name_length);
@@ -224,8 +230,7 @@ static int read_archive_entries(
         if (entry_size < 0) entry_size = 0;
 
         /* Bomb check: decompressed size of this entry */
-        if (max_decompressed_size > 0 &&
-            total_decompressed + entry_size > max_decompressed_size) {
+        if (total_decompressed + entry_size > max_decompressed_size) {
             snprintf(archive_errbuf, sizeof(archive_errbuf),
                      "archive bomb: decompressed size exceeds %lld bytes",
                      (long long)max_decompressed_size);
@@ -254,14 +259,22 @@ static int read_archive_entries(
         size_t block_size;
         int64_t block_offset;
 
-        while (archive_read_data_block(a, &block, &block_size, &block_offset) == ARCHIVE_OK) {
+        int read_rc;
+        while ((read_rc = archive_read_data_block(a, &block, &block_size, &block_offset)) == ARCHIVE_OK) {
             if (block_size == 0) continue;
 
+            /* Integer overflow check */
+            if (block_size > SIZE_MAX - data_len) {
+                free(data);
+                free(safe_name);
+                *err_msg = "archive entry too large (size overflow)";
+                goto fail;
+            }
             size_t needed = data_len + block_size;
 
             /* Bomb check: running total */
             total_decompressed += (int64_t)block_size;
-            if (max_decompressed_size > 0 && total_decompressed > max_decompressed_size) {
+            if (total_decompressed > max_decompressed_size) {
                 snprintf(archive_errbuf, sizeof(archive_errbuf),
                          "archive bomb: decompressed size exceeds %lld bytes",
                          (long long)max_decompressed_size);
@@ -290,9 +303,19 @@ static int read_archive_entries(
             data_len += block_size;
         }
 
+        /* Check if loop ended due to error (not EOF) */
+        if (read_rc != ARCHIVE_EOF && read_rc != ARCHIVE_OK) {
+            snprintf(archive_errbuf, sizeof(archive_errbuf),
+                     "archive read error: %s", archive_error_string(a));
+            *err_msg = archive_errbuf;
+            free(data);
+            free(safe_name);
+            goto fail;
+        }
+
         /* Bomb check: compression ratio */
         total_compressed = archive_filter_bytes(a, -1);
-        if (max_compression_ratio > 0 && total_compressed > 0 &&
+        if (total_compressed > 0 &&
             total_decompressed / total_compressed > max_compression_ratio) {
             snprintf(archive_errbuf, sizeof(archive_errbuf),
                      "archive bomb: compression ratio exceeds %d:1",
@@ -378,10 +401,16 @@ komparu_dir_result_t *komparu_compare_archives(
         int cmp = strcmp(list_a.entries[i].name, list_b.entries[j].name);
 
         if (cmp < 0) {
-            komparu_dir_result_add_only_left(result, list_a.entries[i].name);
+            if (komparu_dir_result_add_only_left(result, list_a.entries[i].name) != 0) {
+                *err_msg = "out of memory";
+                goto merge_fail;
+            }
             i++;
         } else if (cmp > 0) {
-            komparu_dir_result_add_only_right(result, list_b.entries[j].name);
+            if (komparu_dir_result_add_only_right(result, list_b.entries[j].name) != 0) {
+                *err_msg = "out of memory";
+                goto merge_fail;
+            }
             j++;
         } else {
             /* Same entry name — compare data */
@@ -389,9 +418,15 @@ komparu_dir_result_t *komparu_compare_archives(
             entry_data_t *eb = &list_b.entries[j];
 
             if (ea->size != eb->size) {
-                komparu_dir_result_add_diff(result, ea->name, KOMPARU_DIFF_SIZE);
+                if (komparu_dir_result_add_diff(result, ea->name, KOMPARU_DIFF_SIZE) != 0) {
+                    *err_msg = "out of memory";
+                    goto merge_fail;
+                }
             } else if (ea->size > 0 && memcmp(ea->data, eb->data, ea->size) != 0) {
-                komparu_dir_result_add_diff(result, ea->name, KOMPARU_DIFF_CONTENT);
+                if (komparu_dir_result_add_diff(result, ea->name, KOMPARU_DIFF_CONTENT) != 0) {
+                    *err_msg = "out of memory";
+                    goto merge_fail;
+                }
             }
             /* else: both empty or identical */
 
@@ -401,18 +436,30 @@ komparu_dir_result_t *komparu_compare_archives(
     }
 
     while (i < list_a.count) {
-        komparu_dir_result_add_only_left(result, list_a.entries[i].name);
+        if (komparu_dir_result_add_only_left(result, list_a.entries[i].name) != 0) {
+            *err_msg = "out of memory";
+            goto merge_fail;
+        }
         i++;
     }
 
     while (j < list_b.count) {
-        komparu_dir_result_add_only_right(result, list_b.entries[j].name);
+        if (komparu_dir_result_add_only_right(result, list_b.entries[j].name) != 0) {
+            *err_msg = "out of memory";
+            goto merge_fail;
+        }
         j++;
     }
 
     entry_list_free(&list_a);
     entry_list_free(&list_b);
     return result;
+
+merge_fail:
+    entry_list_free(&list_a);
+    entry_list_free(&list_b);
+    komparu_dir_result_free(result);
+    return NULL;
 }
 
 /* =========================================================================

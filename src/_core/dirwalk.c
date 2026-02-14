@@ -92,11 +92,14 @@ static int walk_recursive(
 
         /* Build relative path */
         char rel_path[PATH_MAX];
+        int plen;
         if (rel_prefix[0]) {
-            snprintf(rel_path, sizeof(rel_path), "%s/%s", rel_prefix, name);
+            plen = snprintf(rel_path, sizeof(rel_path), "%s/%s", rel_prefix, name);
         } else {
-            snprintf(rel_path, sizeof(rel_path), "%s", name);
+            plen = snprintf(rel_path, sizeof(rel_path), "%s", name);
         }
+        if (KOMPARU_UNLIKELY(plen < 0 || (size_t)plen >= sizeof(rel_path)))
+            continue; /* path too long — skip */
 
         if (S_ISREG(st.st_mode)) {
             if (KOMPARU_UNLIKELY(pathlist_append(result, rel_path, err_msg) != 0)) {
@@ -205,13 +208,25 @@ komparu_dir_result_t *komparu_compare_dirs(
         } else {
             /* Same relative path — compare files */
             char path_a[PATH_MAX], path_b[PATH_MAX];
-            snprintf(path_a, sizeof(path_a), "%s/%s", dir_a, paths_a.paths[i]);
-            snprintf(path_b, sizeof(path_b), "%s/%s", dir_b, paths_b.paths[j]);
+            int la = snprintf(path_a, sizeof(path_a), "%s/%s", dir_a, paths_a.paths[i]);
+            int lb = snprintf(path_b, sizeof(path_b), "%s/%s", dir_b, paths_b.paths[j]);
+            if (KOMPARU_UNLIKELY(la < 0 || (size_t)la >= sizeof(path_a) ||
+                                 lb < 0 || (size_t)lb >= sizeof(path_b))) {
+                if (KOMPARU_UNLIKELY(komparu_dir_result_add_diff(result, paths_a.paths[i], KOMPARU_DIFF_READ_ERROR) != 0)) {
+                    *err_msg = "out of memory";
+                    goto fail;
+                }
+                i++; j++;
+                continue;
+            }
 
             const char *cmp_err = NULL;
             komparu_reader_t *ra = komparu_reader_file_open(path_a, &cmp_err);
             if (KOMPARU_UNLIKELY(!ra)) {
-                komparu_dir_result_add_diff(result, paths_a.paths[i], KOMPARU_DIFF_READ_ERROR);
+                if (KOMPARU_UNLIKELY(komparu_dir_result_add_diff(result, paths_a.paths[i], KOMPARU_DIFF_READ_ERROR) != 0)) {
+                    *err_msg = "out of memory";
+                    goto fail;
+                }
                 i++; j++;
                 continue;
             }
@@ -219,7 +234,10 @@ komparu_dir_result_t *komparu_compare_dirs(
             komparu_reader_t *rb = komparu_reader_file_open(path_b, &cmp_err);
             if (KOMPARU_UNLIKELY(!rb)) {
                 ra->close(ra);
-                komparu_dir_result_add_diff(result, paths_a.paths[i], KOMPARU_DIFF_READ_ERROR);
+                if (KOMPARU_UNLIKELY(komparu_dir_result_add_diff(result, paths_a.paths[i], KOMPARU_DIFF_READ_ERROR) != 0)) {
+                    *err_msg = "out of memory";
+                    goto fail;
+                }
                 i++; j++;
                 continue;
             }
@@ -231,7 +249,10 @@ komparu_dir_result_t *komparu_compare_dirs(
                 if (sa >= 0 && sb >= 0 && sa != sb) {
                     ra->close(ra);
                     rb->close(rb);
-                    komparu_dir_result_add_diff(result, paths_a.paths[i], KOMPARU_DIFF_SIZE);
+                    if (KOMPARU_UNLIKELY(komparu_dir_result_add_diff(result, paths_a.paths[i], KOMPARU_DIFF_SIZE) != 0)) {
+                        *err_msg = "out of memory";
+                        goto fail;
+                    }
                     i++; j++;
                     continue;
                 }
@@ -243,12 +264,19 @@ komparu_dir_result_t *komparu_compare_dirs(
                 if (qr == KOMPARU_DIFFERENT) {
                     ra->close(ra);
                     rb->close(rb);
-                    komparu_dir_result_add_diff(result, paths_a.paths[i], KOMPARU_DIFF_CONTENT);
+                    if (KOMPARU_UNLIKELY(komparu_dir_result_add_diff(result, paths_a.paths[i], KOMPARU_DIFF_CONTENT) != 0)) {
+                        *err_msg = "out of memory";
+                        goto fail;
+                    }
                     i++; j++;
                     continue;
                 }
                 /* EQUAL from quick_check → still need full compare */
-                /* ERROR → fall through to full compare */
+                /* ERROR → seek back to start before full compare */
+                if (qr == KOMPARU_ERROR && ra->seek && rb->seek) {
+                    ra->seek(ra, 0);
+                    rb->seek(rb, 0);
+                }
             }
 
             komparu_result_t cr = komparu_compare(ra, rb, chunk_size, false, &cmp_err);
@@ -256,9 +284,15 @@ komparu_dir_result_t *komparu_compare_dirs(
             rb->close(rb);
 
             if (cr == KOMPARU_DIFFERENT) {
-                komparu_dir_result_add_diff(result, paths_a.paths[i], KOMPARU_DIFF_CONTENT);
+                if (KOMPARU_UNLIKELY(komparu_dir_result_add_diff(result, paths_a.paths[i], KOMPARU_DIFF_CONTENT) != 0)) {
+                    *err_msg = "out of memory";
+                    goto fail;
+                }
             } else if (cr == KOMPARU_ERROR) {
-                komparu_dir_result_add_diff(result, paths_a.paths[i], KOMPARU_DIFF_READ_ERROR);
+                if (KOMPARU_UNLIKELY(komparu_dir_result_add_diff(result, paths_a.paths[i], KOMPARU_DIFF_READ_ERROR) != 0)) {
+                    *err_msg = "out of memory";
+                    goto fail;
+                }
             }
 
             i++; j++;
