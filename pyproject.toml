@@ -1,0 +1,61 @@
+[build-system]
+requires = ["scikit-build-core>=0.10"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "komparu"
+version = "0.1.0"
+description = "Ultra-fast file comparison library with C23 core"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+authors = [
+    { name = "Shamil Abdulaev" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: C",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: System :: Filesystems",
+    "Typing :: Typed",
+]
+keywords = ["compare", "diff", "file", "binary", "fast"]
+
+[project.urls]
+Homepage = "https://github.com/ashm-dev/komparu"
+Repository = "https://github.com/ashm-dev/komparu"
+Issues = "https://github.com/ashm-dev/komparu/issues"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.scikit-build]
+minimum-version = "0.10"
+build-dir = "build/{wheel_tag}"
+wheel.packages = ["src/komparu"]
+
+[tool.scikit-build.cmake.define]
+BUILD_TESTING = "OFF"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+
+[tool.cibuildwheel]
+test-command = "python -c \"import komparu; print(komparu.__version__)\""
+skip = ["pp*"]
+
+[tool.cibuildwheel.linux]
+before-all = "yum install -y libcurl-devel libarchive-devel || apt-get install -y libcurl4-openssl-dev libarchive-dev"
+
+[tool.cibuildwheel.macos]
+before-all = "brew install libarchive curl"
