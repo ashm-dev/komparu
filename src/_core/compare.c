@@ -196,3 +196,73 @@ komparu_result_t komparu_quick_check(
 
     return result;
 }
+
+/* =========================================================================
+ * Directory / archive comparison result helpers
+ * ========================================================================= */
+
+komparu_dir_result_t *komparu_dir_result_new(void) {
+    komparu_dir_result_t *r = calloc(1, sizeof(komparu_dir_result_t));
+    if (r) r->equal = true;
+    return r;
+}
+
+void komparu_dir_result_free(komparu_dir_result_t *r) {
+    if (!r) return;
+    for (size_t i = 0; i < r->diff_count; i++)
+        free(r->diffs[i].path);
+    free(r->diffs);
+    for (size_t i = 0; i < r->only_left_count; i++)
+        free(r->only_left[i]);
+    free(r->only_left);
+    for (size_t i = 0; i < r->only_right_count; i++)
+        free(r->only_right[i]);
+    free(r->only_right);
+    free(r);
+}
+
+int komparu_dir_result_add_diff(komparu_dir_result_t *r, const char *path, int reason) {
+    if (r->diff_count >= r->diff_cap) {
+        size_t new_cap = r->diff_cap ? r->diff_cap * 2 : 64;
+        komparu_diff_entry_t *tmp = realloc(r->diffs, new_cap * sizeof(*tmp));
+        if (!tmp) return -1;
+        r->diffs = tmp;
+        r->diff_cap = new_cap;
+    }
+    r->diffs[r->diff_count].path = strdup(path);
+    if (!r->diffs[r->diff_count].path) return -1;
+    r->diffs[r->diff_count].reason = reason;
+    r->diff_count++;
+    r->equal = false;
+    return 0;
+}
+
+int komparu_dir_result_add_only_left(komparu_dir_result_t *r, const char *path) {
+    if (r->only_left_count >= r->only_left_cap) {
+        size_t new_cap = r->only_left_cap ? r->only_left_cap * 2 : 64;
+        char **tmp = realloc(r->only_left, new_cap * sizeof(char *));
+        if (!tmp) return -1;
+        r->only_left = tmp;
+        r->only_left_cap = new_cap;
+    }
+    r->only_left[r->only_left_count] = strdup(path);
+    if (!r->only_left[r->only_left_count]) return -1;
+    r->only_left_count++;
+    r->equal = false;
+    return 0;
+}
+
+int komparu_dir_result_add_only_right(komparu_dir_result_t *r, const char *path) {
+    if (r->only_right_count >= r->only_right_cap) {
+        size_t new_cap = r->only_right_cap ? r->only_right_cap * 2 : 64;
+        char **tmp = realloc(r->only_right, new_cap * sizeof(char *));
+        if (!tmp) return -1;
+        r->only_right = tmp;
+        r->only_right_cap = new_cap;
+    }
+    r->only_right[r->only_right_count] = strdup(path);
+    if (!r->only_right[r->only_right_count]) return -1;
+    r->only_right_count++;
+    r->equal = false;
+    return 0;
+}

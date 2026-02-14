@@ -51,4 +51,41 @@ komparu_result_t komparu_quick_check(
     const char **err_msg
 );
 
+/* =========================================================================
+ * Directory / archive comparison result
+ * ========================================================================= */
+
+/* Diff reasons */
+#define KOMPARU_DIFF_CONTENT    0
+#define KOMPARU_DIFF_SIZE       1
+#define KOMPARU_DIFF_READ_ERROR 2
+
+typedef struct {
+    char *path;
+    int reason;
+} komparu_diff_entry_t;
+
+typedef struct komparu_dir_result {
+    bool equal;
+
+    komparu_diff_entry_t *diffs;
+    size_t diff_count;
+    size_t diff_cap;
+
+    char **only_left;
+    size_t only_left_count;
+    size_t only_left_cap;
+
+    char **only_right;
+    size_t only_right_count;
+    size_t only_right_cap;
+} komparu_dir_result_t;
+
+komparu_dir_result_t *komparu_dir_result_new(void);
+void komparu_dir_result_free(komparu_dir_result_t *result);
+
+int komparu_dir_result_add_diff(komparu_dir_result_t *r, const char *path, int reason);
+int komparu_dir_result_add_only_left(komparu_dir_result_t *r, const char *path);
+int komparu_dir_result_add_only_right(komparu_dir_result_t *r, const char *path);
+
 #endif /* KOMPARU_COMPARE_H */

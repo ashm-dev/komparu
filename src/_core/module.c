@@ -10,7 +10,10 @@
 #include "compare.h"
 #include "reader_file.h"
 #include "reader_http.h"
+#include "dirwalk.h"
+#include "reader_archive.h"
 #include <string.h>
+#include <stdlib.h>
 
 /* =========================================================================
  * URL detection — check if source is an HTTP(S) URL
@@ -270,6 +273,232 @@ done:
 }
 
 /* =========================================================================
+ * Convert C dir_result_t to Python dict.
+ * Must be called with GIL held.
+ * ========================================================================= */
+
+static const char *diff_reason_str(int reason) {
+    switch (reason) {
+        case KOMPARU_DIFF_CONTENT: return "content_mismatch";
+        case KOMPARU_DIFF_SIZE:    return "size_mismatch";
+        case KOMPARU_DIFF_READ_ERROR: return "read_error";
+        default: return "unknown";
+    }
+}
+
+static PyObject *dir_result_to_python(komparu_dir_result_t *r) {
+    PyObject *dict = PyDict_New();
+    if (!dict) return NULL;
+
+    /* equal */
+    PyObject *equal = r->equal ? Py_True : Py_False;
+    if (PyDict_SetItemString(dict, "equal", equal) < 0) goto fail;
+
+    /* diff: dict[str, str] */
+    {
+        PyObject *diff = PyDict_New();
+        if (!diff) goto fail;
+        for (size_t i = 0; i < r->diff_count; i++) {
+            PyObject *key = PyUnicode_FromString(r->diffs[i].path);
+            PyObject *val = PyUnicode_FromString(diff_reason_str(r->diffs[i].reason));
+            if (!key || !val || PyDict_SetItem(diff, key, val) < 0) {
+                Py_XDECREF(key);
+                Py_XDECREF(val);
+                Py_DECREF(diff);
+                goto fail;
+            }
+            Py_DECREF(key);
+            Py_DECREF(val);
+        }
+        if (PyDict_SetItemString(dict, "diff", diff) < 0) {
+            Py_DECREF(diff);
+            goto fail;
+        }
+        Py_DECREF(diff);
+    }
+
+    /* only_left: set[str] */
+    {
+        PyObject *ol = PySet_New(NULL);
+        if (!ol) goto fail;
+        for (size_t i = 0; i < r->only_left_count; i++) {
+            PyObject *s = PyUnicode_FromString(r->only_left[i]);
+            if (!s || PySet_Add(ol, s) < 0) {
+                Py_XDECREF(s);
+                Py_DECREF(ol);
+                goto fail;
+            }
+            Py_DECREF(s);
+        }
+        if (PyDict_SetItemString(dict, "only_left", ol) < 0) {
+            Py_DECREF(ol);
+            goto fail;
+        }
+        Py_DECREF(ol);
+    }
+
+    /* only_right: set[str] */
+    {
+        PyObject *or_set = PySet_New(NULL);
+        if (!or_set) goto fail;
+        for (size_t i = 0; i < r->only_right_count; i++) {
+            PyObject *s = PyUnicode_FromString(r->only_right[i]);
+            if (!s || PySet_Add(or_set, s) < 0) {
+                Py_XDECREF(s);
+                Py_DECREF(or_set);
+                goto fail;
+            }
+            Py_DECREF(s);
+        }
+        if (PyDict_SetItemString(dict, "only_right", or_set) < 0) {
+            Py_DECREF(or_set);
+            goto fail;
+        }
+        Py_DECREF(or_set);
+    }
+
+    return dict;
+
+fail:
+    Py_DECREF(dict);
+    return NULL;
+}
+
+/* =========================================================================
+ * Python wrapper: compare_dir(dir_a, dir_b, ...) -> dict
+ * ========================================================================= */
+
+static PyObject *py_compare_dir(PyObject *self, PyObject *args, PyObject *kwargs) {
+    (void)self;
+
+    const char *dir_a = NULL;
+    const char *dir_b = NULL;
+    Py_ssize_t chunk_size = KOMPARU_DEFAULT_CHUNK_SIZE;
+    int size_precheck = 1;
+    int quick_check = 1;
+    int follow_symlinks = 1;
+
+    static char *kwlist[] = {
+        "dir_a", "dir_b", "chunk_size", "size_precheck",
+        "quick_check", "follow_symlinks", NULL
+    };
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ss|nppp", kwlist,
+            &dir_a, &dir_b, &chunk_size, &size_precheck,
+            &quick_check, &follow_symlinks)) {
+        return NULL;
+    }
+
+    if (chunk_size <= 0) {
+        PyErr_SetString(PyExc_ValueError, "chunk_size must be positive");
+        return NULL;
+    }
+
+    char *da = strdup(dir_a);
+    char *db = strdup(dir_b);
+    if (!da || !db) {
+        free(da);
+        free(db);
+        PyErr_NoMemory();
+        return NULL;
+    }
+
+    const char *err_msg = NULL;
+    komparu_dir_result_t *result;
+
+    KOMPARU_GIL_STATE_DECL
+    KOMPARU_GIL_RELEASE()
+
+    result = komparu_compare_dirs(da, db,
+        (size_t)chunk_size, (bool)size_precheck,
+        (bool)quick_check, (bool)follow_symlinks,
+        &err_msg);
+
+    KOMPARU_GIL_ACQUIRE()
+
+    free(da);
+    free(db);
+
+    if (!result) {
+        PyErr_Format(PyExc_IOError, "directory comparison failed: %s",
+                     err_msg ? err_msg : "unknown error");
+        return NULL;
+    }
+
+    PyObject *py_result = dir_result_to_python(result);
+    komparu_dir_result_free(result);
+    return py_result;
+}
+
+/* =========================================================================
+ * Python wrapper: compare_archive(path_a, path_b, ...) -> dict
+ * ========================================================================= */
+
+static PyObject *py_compare_archive(PyObject *self, PyObject *args, PyObject *kwargs) {
+    (void)self;
+
+    const char *path_a = NULL;
+    const char *path_b = NULL;
+    Py_ssize_t chunk_size = KOMPARU_DEFAULT_CHUNK_SIZE;
+    long long max_decompressed_size = -1;  /* -1 = use default */
+    int max_compression_ratio = -1;
+    long long max_entries = -1;
+    long long max_entry_name_length = -1;
+
+    static char *kwlist[] = {
+        "path_a", "path_b", "chunk_size",
+        "max_decompressed_size", "max_compression_ratio",
+        "max_entries", "max_entry_name_length", NULL
+    };
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ss|nLiLL", kwlist,
+            &path_a, &path_b, &chunk_size,
+            &max_decompressed_size, &max_compression_ratio,
+            &max_entries, &max_entry_name_length)) {
+        return NULL;
+    }
+
+    char *pa = strdup(path_a);
+    char *pb = strdup(path_b);
+    if (!pa || !pb) {
+        free(pa);
+        free(pb);
+        PyErr_NoMemory();
+        return NULL;
+    }
+
+    /* Apply defaults for -1 values */
+    int64_t mds = max_decompressed_size >= 0 ? (int64_t)max_decompressed_size : 0;
+    int mcr = max_compression_ratio >= 0 ? max_compression_ratio : 0;
+    int64_t me = max_entries >= 0 ? (int64_t)max_entries : 0;
+    int64_t menl = max_entry_name_length >= 0 ? (int64_t)max_entry_name_length : 0;
+
+    const char *err_msg = NULL;
+    komparu_dir_result_t *result;
+
+    KOMPARU_GIL_STATE_DECL
+    KOMPARU_GIL_RELEASE()
+
+    result = komparu_compare_archives(pa, pb,
+        (size_t)chunk_size, mds, mcr, me, menl, &err_msg);
+
+    KOMPARU_GIL_ACQUIRE()
+
+    free(pa);
+    free(pb);
+
+    if (!result) {
+        PyErr_Format(PyExc_IOError, "archive comparison failed: %s",
+                     err_msg ? err_msg : "unknown error");
+        return NULL;
+    }
+
+    PyObject *py_result = dir_result_to_python(result);
+    komparu_dir_result_free(result);
+    return py_result;
+}
+
+/* =========================================================================
  * Module definition
  * ========================================================================= */
 
@@ -283,6 +512,23 @@ static PyMethodDef module_methods[] = {
         "verify_ssl=True) -> bool\n\n"
         "Compare two sources byte-by-byte. Sources can be file paths or HTTP(S) URLs.\n"
         "Returns True if sources are identical, False otherwise."
+    },
+    {
+        "compare_dir",
+        (PyCFunction)(void(*)(void))py_compare_dir,
+        METH_VARARGS | METH_KEYWORDS,
+        "compare_dir(dir_a, dir_b, *, chunk_size=65536, size_precheck=True, "
+        "quick_check=True, follow_symlinks=True) -> dict\n\n"
+        "Compare two directories recursively.\n"
+        "Returns dict with equal, diff, only_left, only_right."
+    },
+    {
+        "compare_archive",
+        (PyCFunction)(void(*)(void))py_compare_archive,
+        METH_VARARGS | METH_KEYWORDS,
+        "compare_archive(path_a, path_b, *, chunk_size=65536) -> dict\n\n"
+        "Compare two archive files entry-by-entry.\n"
+        "Returns dict with equal, diff, only_left, only_right."
     },
     {NULL, NULL, 0, NULL}
 };

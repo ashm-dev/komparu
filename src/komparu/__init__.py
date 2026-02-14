@@ -30,6 +30,8 @@ from komparu._config import configure, get_config, reset_config
 
 # Import C extension
 from komparu._core import compare as _compare_c
+from komparu._core import compare_dir as _compare_dir_c
+from komparu._core import compare_archive as _compare_archive_c
 
 
 def _resolve_headers(source: str | Source, global_headers: dict[str, str] | None) -> dict[str, str] | None:
@@ -120,9 +122,95 @@ def compare(
     )
 
 
+def _build_dir_result(raw: dict) -> DirResult:
+    """Convert C extension dict to DirResult."""
+    diff = {k: DiffReason(v) for k, v in raw["diff"].items()}
+    return DirResult(
+        equal=raw["equal"],
+        diff=diff,
+        only_left=raw["only_left"],
+        only_right=raw["only_right"],
+    )
+
+
+def compare_dir(
+    dir_a: str,
+    dir_b: str,
+    *,
+    chunk_size: int | None = None,
+    size_precheck: bool | None = None,
+    quick_check: bool | None = None,
+    follow_symlinks: bool = True,
+) -> DirResult:
+    """Compare two directories recursively.
+
+    :param dir_a: Path to first directory.
+    :param dir_b: Path to second directory.
+    :param chunk_size: Chunk size for file comparison.
+    :param size_precheck: Compare file sizes before content.
+    :param quick_check: Sample first/last/middle before full scan.
+    :param follow_symlinks: Follow symbolic links during traversal.
+    :returns: DirResult with equal, diff, only_left, only_right.
+    """
+    cfg = get_config()
+    cs = chunk_size if chunk_size is not None else cfg.chunk_size
+    sp = size_precheck if size_precheck is not None else cfg.size_precheck
+    qc = quick_check if quick_check is not None else cfg.quick_check
+
+    raw = _compare_dir_c(
+        dir_a, dir_b,
+        chunk_size=cs,
+        size_precheck=sp,
+        quick_check=qc,
+        follow_symlinks=follow_symlinks,
+    )
+    return _build_dir_result(raw)
+
+
+def compare_archive(
+    path_a: str,
+    path_b: str,
+    *,
+    chunk_size: int | None = None,
+    max_decompressed_size: int | None = None,
+    max_compression_ratio: int | None = None,
+    max_archive_entries: int | None = None,
+    max_entry_name_length: int | None = None,
+) -> DirResult:
+    """Compare two archive files entry-by-entry.
+
+    :param path_a: Path to first archive file.
+    :param path_b: Path to second archive file.
+    :param chunk_size: Chunk size (unused, archives compared in-memory).
+    :param max_decompressed_size: Max total decompressed bytes (bomb limit).
+    :param max_compression_ratio: Max compression ratio (bomb limit).
+    :param max_archive_entries: Max number of archive entries (bomb limit).
+    :param max_entry_name_length: Max entry path length (bomb limit).
+    :returns: DirResult with equal, diff, only_left, only_right.
+    """
+    cfg = get_config()
+    cs = chunk_size if chunk_size is not None else cfg.chunk_size
+    mds = max_decompressed_size if max_decompressed_size is not None else (cfg.max_decompressed_size or -1)
+    mcr = max_compression_ratio if max_compression_ratio is not None else (cfg.max_compression_ratio or -1)
+    me = max_archive_entries if max_archive_entries is not None else (cfg.max_archive_entries or -1)
+    menl = max_entry_name_length if max_entry_name_length is not None else (cfg.max_entry_name_length or -1)
+
+    raw = _compare_archive_c(
+        path_a, path_b,
+        chunk_size=cs,
+        max_decompressed_size=mds,
+        max_compression_ratio=mcr,
+        max_entries=me,
+        max_entry_name_length=menl,
+    )
+    return _build_dir_result(raw)
+
+
 __all__ = [
     "__version__",
     "compare",
+    "compare_dir",
+    "compare_archive",
     "configure",
     "get_config",
     "reset_config",
