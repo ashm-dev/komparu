@@ -36,6 +36,7 @@ Issues = "https://github.com/ashm-dev/komparu/issues"
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    "pytest-httpserver>=1.1",
 ]
 
 [tool.scikit-build]

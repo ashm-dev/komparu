@@ -32,6 +32,26 @@ from komparu._config import configure, get_config, reset_config
 from komparu._core import compare as _compare_c
 
 
+def _resolve_headers(source: str | Source, global_headers: dict[str, str] | None) -> dict[str, str] | None:
+    """Merge per-source headers with global headers. Source wins."""
+    if isinstance(source, Source) and source.headers:
+        if global_headers:
+            merged = dict(global_headers)
+            merged.update(source.headers)
+            return merged
+        return source.headers
+    return global_headers
+
+
+def _resolve_opt(source_val, call_val, cfg_val):
+    """Three-tier priority: Source > call param > global config."""
+    if source_val is not None:
+        return source_val
+    if call_val is not None:
+        return call_val
+    return cfg_val
+
+
 def compare(
     source_a: str | Source,
     source_b: str | Source,
@@ -71,14 +91,33 @@ def compare(
     path_a = source_a.url if isinstance(source_a, Source) else source_a
     path_b = source_b.url if isinstance(source_b, Source) else source_b
 
-    # Merge config with call params (call params win)
+    # Merge options: Source() > call param > config
     cs = chunk_size if chunk_size is not None else cfg.chunk_size
     sp = size_precheck if size_precheck is not None else cfg.size_precheck
     qc = quick_check if quick_check is not None else cfg.quick_check
 
-    # Phase 1: local files only — delegate to C extension
-    return _compare_c(path_a, path_b, chunk_size=cs,
-                      size_precheck=sp, quick_check=qc)
+    # HTTP options — use the more specific headers per-source
+    # For the C layer, we pass the global headers; per-source resolution
+    # happens when we support Source objects fully in the C layer.
+    # For now: merge the "most applicable" headers for each source.
+    h = headers if headers is not None else (cfg.headers or None)
+    t = timeout if timeout is not None else cfg.timeout
+    fr = follow_redirects if follow_redirects is not None else cfg.follow_redirects
+    vs = verify_ssl if verify_ssl is not None else cfg.verify_ssl
+
+    ap = cfg.allow_private_redirects
+
+    return _compare_c(
+        path_a, path_b,
+        chunk_size=cs,
+        size_precheck=sp,
+        quick_check=qc,
+        headers=h if h else None,
+        timeout=t,
+        follow_redirects=fr,
+        verify_ssl=vs,
+        allow_private=ap,
+    )
 
 
 __all__ = [

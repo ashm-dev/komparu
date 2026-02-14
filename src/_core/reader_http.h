@@ -24,4 +24,18 @@ int komparu_curl_global_init(void);
  */
 void komparu_curl_global_cleanup(void);
 
+/**
+ * Create an HTTP reader allowing connections to private networks.
+ * Same as komparu_reader_http_open but with allow_private flag.
+ */
+komparu_reader_t *komparu_reader_http_open_ex(
+    const char *url,
+    const char **headers,
+    double timeout,
+    bool follow_redirects,
+    bool verify_ssl,
+    bool allow_private,
+    const char **err_msg
+);
+
 #endif /* KOMPARU_READER_HTTP_H */

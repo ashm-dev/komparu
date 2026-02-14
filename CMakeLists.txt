@@ -117,7 +117,32 @@ elseif(UNIX AND NOT APPLE)
 endif()
 
 # =============================================================================
-# 6. Installation
+# 6. Sanitizers (opt-in via -DKOMPARU_SANITIZER=address|undefined|thread|memory)
+# =============================================================================
+
+set(KOMPARU_SANITIZER "" CACHE STRING "Enable sanitizer (address, undefined, thread, memory)")
+
+if(KOMPARU_SANITIZER)
+    if(KOMPARU_SANITIZER STREQUAL "address")
+        target_compile_options(_core PRIVATE -fsanitize=address -fno-omit-frame-pointer)
+        target_link_options(_core PRIVATE -fsanitize=address)
+    elseif(KOMPARU_SANITIZER STREQUAL "undefined")
+        target_compile_options(_core PRIVATE -fsanitize=undefined -fno-omit-frame-pointer)
+        target_link_options(_core PRIVATE -fsanitize=undefined)
+    elseif(KOMPARU_SANITIZER STREQUAL "thread")
+        target_compile_options(_core PRIVATE -fsanitize=thread -fno-omit-frame-pointer)
+        target_link_options(_core PRIVATE -fsanitize=thread)
+    elseif(KOMPARU_SANITIZER STREQUAL "memory")
+        target_compile_options(_core PRIVATE -fsanitize=memory -fno-omit-frame-pointer)
+        target_link_options(_core PRIVATE -fsanitize=memory)
+    else()
+        message(FATAL_ERROR "Unknown sanitizer: ${KOMPARU_SANITIZER}")
+    endif()
+    message(STATUS "Sanitizer enabled: ${KOMPARU_SANITIZER}")
+endif()
+
+# =============================================================================
+# 7. Installation
 # =============================================================================
 
 # Install the extension module into the komparu package directory
