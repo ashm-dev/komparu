@@ -1,6 +1,17 @@
 # komparu
 
-Ultra-fast file comparison library with C23 core.
+Ultra-fast file comparison library with a C23 core. Compares local files, directories, archives, and HTTP resources byte-by-byte using memory-mapped I/O, vectorized operations, and a native thread pool.
+
+## Features
+
+- **mmap + MADV_SEQUENTIAL** — zero-copy reads with kernel readahead hints
+- **Quick check** — samples first/last/middle bytes before full scan (catches most differences in O(1))
+- **Size precheck** — skips content comparison when file sizes differ
+- **Parallel directory comparison** — native pthread pool, configurable worker count
+- **Archive comparison** — entry-by-entry comparison of tar/zip/gz/bz2/xz via libarchive
+- **HTTP comparison** — compare local files against remote URLs via libcurl
+- **Async API** — `komparu.aio` with C thread pool + eventfd, zero `asyncio.to_thread()` overhead
+- **Archive bomb protection** — configurable size/ratio/entry limits
 
 ## Installation
 
@@ -8,14 +19,154 @@ Ultra-fast file comparison library with C23 core.
 pip install komparu
 ```
 
-## Usage
+From source (requires clang, cmake, libcurl, libarchive):
+
+```bash
+CC=clang CMAKE_ARGS="-DCMAKE_C_COMPILER=clang" pip install -e .
+```
+
+## Quick Start
 
 ```python
 import komparu
 
-# Compare two local files
-result = komparu.compare("/path/to/file_a", "/path/to/file_b")
+# Compare two files
+equal = komparu.compare("file_a.bin", "file_b.bin")
+
+# Compare directories
+result = komparu.compare_dir("/dir_a", "/dir_b")
+print(result.equal, result.diff, result.only_left, result.only_right)
+
+# Compare archives
+result = komparu.compare_archive("a.tar.gz", "b.tar.gz")
+
+# Compare file against URL
+equal = komparu.compare("local.bin", "https://example.com/remote.bin")
+
+# Compare local directory against URL mapping
+result = komparu.compare_dir_urls("/local/dir", {
+    "file1.txt": "https://cdn.example.com/file1.txt",
+    "file2.txt": "https://cdn.example.com/file2.txt",
+})
+
+# Check if all sources are identical
+all_same = komparu.compare_all(["file1", "file2", "file3"])
+
+# Detailed pairwise comparison
+result = komparu.compare_many(["file1", "file2", "file3"])
+print(result.all_equal, result.groups, result.diff)
 ```
+
+## Async API
+
+```python
+import komparu.aio
+
+# All functions mirror the sync API
+equal = await komparu.aio.compare("file_a", "file_b")
+result = await komparu.aio.compare_dir("/dir_a", "/dir_b")
+result = await komparu.aio.compare_archive("a.tar.gz", "b.tar.gz")
+all_same = await komparu.aio.compare_all(["f1", "f2", "f3"])
+result = await komparu.aio.compare_many(["f1", "f2", "f3"])
+result = await komparu.aio.compare_dir_urls("/dir", url_map)
+```
+
+The async API uses C threads + eventfd/pipe integrated with `asyncio.loop.add_reader()`. No Python threads, no GIL contention, no stack overhead.
+
+## Configuration
+
+```python
+komparu.configure(
+    chunk_size=65536,          # bytes per read (default: 64KB)
+    size_precheck=True,        # compare sizes first
+    quick_check=True,          # sample first/last/middle bytes
+    max_workers=0,             # thread pool size (0 = auto)
+    timeout=30.0,              # HTTP timeout in seconds
+    follow_redirects=True,     # follow HTTP redirects
+    verify_ssl=True,           # verify SSL certificates
+    headers={"Authorization": "Bearer ..."},  # HTTP headers
+)
+```
+
+## Types
+
+```python
+from komparu import DirResult, CompareResult, DiffReason, Source
+
+# DirResult — returned by compare_dir, compare_archive, compare_dir_urls
+result.equal         # bool
+result.diff          # dict[str, DiffReason] — relative paths that differ
+result.only_left     # set[str] — files only in first source
+result.only_right    # set[str] — files only in second source
+
+# DiffReason — why files differ
+DiffReason.CONTENT_MISMATCH
+DiffReason.SIZE_MISMATCH
+DiffReason.MISSING
+DiffReason.TYPE_MISMATCH
+DiffReason.READ_ERROR
+
+# CompareResult — returned by compare_many
+result.all_equal     # bool
+result.groups        # list[set[str]] — groups of identical sources
+result.diff          # dict[tuple[str, str], bool] — pairwise results
+
+# Source — for per-source HTTP settings
+source = Source(url="https://...", headers={...}, timeout=10.0)
+komparu.compare(source, "local.bin")
+```
+
+## Benchmarks
+
+All benchmarks on tmpfs (/dev/shm) with page cache warmed. 20 samples per benchmark, auto-calibrated loop count. Source code and raw results in [`benchmarks/`](benchmarks/).
+
+### File Comparison (median time)
+
+| Scenario | Size | komparu | filecmp | cmp -s | Go | Rust |
+|----------|------|---------|---------|--------|----|------|
+| identical | 1MB | 310us | 453us | 1.45ms | 2.22ms | 2.05ms |
+| identical | 10MB | 5.12ms | 5.53ms | 6.82ms | 6.76ms | 11.45ms |
+| identical | 100MB | 41ms | 57ms | 80ms | 36ms | 44ms |
+| identical | 1GB | 285ms | 379ms | 341ms | 291ms | 302ms |
+| differ_last | 1MB | 53us | 441us | 1.03ms | 1.17ms | 1.01ms |
+| differ_last | 10MB | 46us | 5.89ms | 6.47ms | 5.97ms | 5.77ms |
+| differ_last | 100MB | 46us | 58ms | 36ms | 31ms | 32ms |
+| differ_last | 1GB | 30us | 373ms | 346ms | 295ms | 303ms |
+
+komparu's **quick_check** samples first/last/middle bytes before scanning. This catches differ-at-end instantly (30us for 1GB) while all competitors must read the entire file.
+
+For identical files, komparu is 1.3x faster than filecmp (Python stdlib) and competitive with native Go/Rust implementations.
+
+### Directory Comparison (median time)
+
+| Scenario | komparu | filecmp | Go | Rust |
+|----------|---------|---------|-----|------|
+| 100 files x 1MB, identical | 14ms | 42ms | 34ms | 32ms |
+| 100 files x 1MB, 1 differs | 14ms | 41ms | 36ms | 37ms |
+| 1000 files x 100KB, identical | 24ms | 54ms | 42ms | 38ms |
+
+komparu's native thread pool gives **2-3x** speedup over filecmp and outperforms Go/Rust implementations.
+
+### Reproduce
+
+```bash
+cd benchmarks/competitors && make all && cd ..
+python run_all.py --fast   # ~5 min quick run
+python run_all.py          # ~30 min full suite
+```
+
+See [`benchmarks/README.md`](benchmarks/README.md) for methodology details.
+
+## Architecture
+
+C23 core with Python bindings via CPython C API:
+
+- **mmap** with `MADV_SEQUENTIAL` for optimal readahead
+- **pthread pool** for parallel directory/multi-file comparison
+- **eventfd** (Linux) / **pipe** (macOS) for async notification
+- **libcurl** for HTTP with connection pooling
+- **libarchive** for archive format support
+- **CAS-based task lifecycle** for safe async cancellation
 
 ## License
 
