@@ -26,6 +26,13 @@
  */
 #define SHARE_LOCK_COUNT 8  /* covers all curl_lock_data values (0..7) */
 
+/* Fail at compile time if libcurl adds new lock_data values beyond our array.
+ * CURL_LOCK_DATA_LAST is defined as the count of enum values in curl.h. */
+#ifdef CURL_LOCK_DATA_LAST
+_Static_assert(CURL_LOCK_DATA_LAST <= SHARE_LOCK_COUNT,
+               "SHARE_LOCK_COUNT too small for this libcurl version");
+#endif
+
 /* =========================================================================
  * Platform-specific mutex array
  * ========================================================================= */

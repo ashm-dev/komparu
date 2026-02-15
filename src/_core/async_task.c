@@ -944,12 +944,15 @@ void komparu_async_task_free(komparu_async_task_t *task) {
 }
 
 void komparu_async_cleanup(void) {
+    /* Atomically steal the pool pointer first — any concurrent get_pool()
+     * will see NULL immediately and either create a new pool or fail.
+     * Then destroy outside the lock (wait+join can be slow). */
     G_POOL_LOCK();
-    komparu_pool_t *pool = atomic_load_explicit(&g_async_pool, memory_order_relaxed);
+    komparu_pool_t *pool = atomic_exchange_explicit(&g_async_pool, NULL, memory_order_acq_rel);
+    G_POOL_UNLOCK();
+
     if (pool) {
         komparu_pool_wait(pool);
         komparu_pool_destroy(pool);
-        atomic_store_explicit(&g_async_pool, NULL, memory_order_release);
     }
-    G_POOL_UNLOCK();
 }

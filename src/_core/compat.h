@@ -120,6 +120,15 @@ static inline size_t komparu_cpu_count(void) {
     #define KOMPARU_UNLIKELY(x) (x)
 #endif
 
+/* =========================================================================
+ * POSIX string function compat (Windows MSVC)
+ * ========================================================================= */
+
+#ifdef KOMPARU_WINDOWS
+    #define strncasecmp _strnicmp
+    #define strcasecmp  _stricmp
+#endif
+
 /* Default chunk size: 64 KB */
 #define KOMPARU_DEFAULT_CHUNK_SIZE  (64 * 1024)
 
