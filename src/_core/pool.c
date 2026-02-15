@@ -14,6 +14,9 @@
 #include "pool.h"
 #include <stdlib.h>
 #include <string.h>
+#ifdef KOMPARU_WINDOWS
+#include <process.h>  /* _beginthreadex */
+#endif
 
 /* =========================================================================
  * Task queue entry
@@ -89,7 +92,7 @@ struct komparu_pool {
  * ========================================================================= */
 
 #ifdef KOMPARU_WINDOWS
-static DWORD WINAPI worker_fn(LPVOID arg) {
+static unsigned __stdcall worker_fn(void *arg) {
 #else
 static void *worker_fn(void *arg) {
 #endif
@@ -205,7 +208,7 @@ komparu_pool_t *komparu_pool_create(size_t num_workers) {
     /* Create worker threads */
     for (size_t i = 0; i < num_workers; i++) {
 #ifdef KOMPARU_WINDOWS
-        pool->threads[i] = CreateThread(NULL, 0, worker_fn, pool, 0, NULL);
+        pool->threads[i] = (HANDLE)_beginthreadex(NULL, 0, worker_fn, pool, 0, NULL);
         if (!pool->threads[i]) {
 #else
         if (pthread_create(&pool->threads[i], NULL, worker_fn, pool) != 0) {
