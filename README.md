@@ -118,9 +118,44 @@ komparu.compare(source, "local.bin")
 
 ## Benchmarks
 
-All benchmarks on tmpfs (/dev/shm) with page cache warmed. 20 samples per benchmark, auto-calibrated loop count. Source code and raw results in [`benchmarks/`](benchmarks/).
+All benchmarks on tmpfs (/dev/shm) with page cache warmed. 20 samples per benchmark, auto-calibrated loop count. Competitors: Python `filecmp` (stdlib), `hashlib` SHA-256, POSIX `cmp -s`, GNU `diff -q`, Go 1.25, Rust 1.93. Source code and raw results in [`benchmarks/`](benchmarks/).
 
-### File Comparison (median time)
+### File Comparison: Identical Files
+
+<p align="center">
+  <img src="benchmarks/charts/file_identical.png" width="700" alt="Identical files benchmark">
+</p>
+
+komparu is consistently at the bottom (fastest). For identical files it is **1.3x faster** than filecmp (Python stdlib) and competitive with native Go/Rust implementations.
+
+### File Comparison: Last Byte Differs
+
+<p align="center">
+  <img src="benchmarks/charts/file_differ_last.png" width="700" alt="Last byte differs benchmark">
+</p>
+
+komparu's **quick_check** samples first/last/middle bytes before scanning. This catches differ-at-end instantly (**30us for 1GB**) while all competitors must read the entire file. The flat red line is O(1) regardless of file size.
+
+### Directory Comparison
+
+<p align="center">
+  <img src="benchmarks/charts/dir_comparison.png" width="700" alt="Directory comparison benchmark">
+</p>
+
+komparu's native thread pool gives **2-3x** speedup over filecmp and outperforms Go/Rust implementations across all directory scenarios.
+
+### Speedup Heatmap
+
+<p align="center">
+  <img src="benchmarks/charts/speedup_heatmap.png" width="650" alt="Speedup heatmap">
+</p>
+
+Green = komparu faster. The bottom row shows quick_check detecting a 1GB last-byte difference **12,000x** faster than filecmp.
+
+<details>
+<summary>Raw numbers (median time)</summary>
+
+**File Comparison**
 
 | Scenario | Size | komparu | filecmp | cmp -s | Go | Rust |
 |----------|------|---------|---------|--------|----|------|
@@ -133,11 +168,7 @@ All benchmarks on tmpfs (/dev/shm) with page cache warmed. 20 samples per benchm
 | differ_last | 100MB | 46us | 58ms | 36ms | 31ms | 32ms |
 | differ_last | 1GB | 30us | 373ms | 346ms | 295ms | 303ms |
 
-komparu's **quick_check** samples first/last/middle bytes before scanning. This catches differ-at-end instantly (30us for 1GB) while all competitors must read the entire file.
-
-For identical files, komparu is 1.3x faster than filecmp (Python stdlib) and competitive with native Go/Rust implementations.
-
-### Directory Comparison (median time)
+**Directory Comparison**
 
 | Scenario | komparu | filecmp | Go | Rust |
 |----------|---------|---------|-----|------|
@@ -145,7 +176,7 @@ For identical files, komparu is 1.3x faster than filecmp (Python stdlib) and com
 | 100 files x 1MB, 1 differs | 14ms | 41ms | 36ms | 37ms |
 | 1000 files x 100KB, identical | 24ms | 54ms | 42ms | 38ms |
 
-komparu's native thread pool gives **2-3x** speedup over filecmp and outperforms Go/Rust implementations.
+</details>
 
 ### Reproduce
 
