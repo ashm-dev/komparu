@@ -162,6 +162,20 @@ all_same = komparu.compare_all([
 ])
 ```
 
+**Параметры:**
+
+| Имя | Тип | По умолчанию | Описание |
+|-----|-----|--------------|----------|
+| `sources` | `list[str \| Source]` | обязателен | Список путей, URL или объектов Source |
+| `chunk_size` | `int` | `65536` | Размер чанка в байтах |
+| `size_precheck` | `bool` | `True` | Сравнить размеры перед содержимым |
+| `quick_check` | `bool` | `True` | Проверить first/last/middle перед полным сканированием |
+| `headers` | `dict[str, str]` | `None` | Глобальные HTTP-заголовки |
+| `timeout` | `float` | `30.0` | HTTP-таймаут в секундах |
+| `follow_redirects` | `bool` | `True` | Следовать HTTP-редиректам |
+| `verify_ssl` | `bool` | `True` | Проверять SSL-сертификаты |
+| `max_workers` | `int` | `0` (авто) | Размер пула потоков (0=авто, 1=последовательно). Только sync. |
+
 ### komparu.compare_many(sources, **options) -> CompareResult
 
 Детальное сравнение множества источников.
@@ -173,6 +187,20 @@ result.all_equal          # bool
 result.groups             # list[set[str]] — группы идентичных
 result.diff               # dict[tuple[str, str], bool] — попарные результаты
 ```
+
+**Параметры:**
+
+| Имя | Тип | По умолчанию | Описание |
+|-----|-----|--------------|----------|
+| `sources` | `list[str \| Source]` | обязателен | Список путей, URL или объектов Source |
+| `chunk_size` | `int` | `65536` | Размер чанка в байтах |
+| `size_precheck` | `bool` | `True` | Сравнить размеры перед содержимым |
+| `quick_check` | `bool` | `True` | Проверить first/last/middle перед полным сканированием |
+| `headers` | `dict[str, str]` | `None` | Глобальные HTTP-заголовки |
+| `timeout` | `float` | `30.0` | HTTP-таймаут в секундах |
+| `follow_redirects` | `bool` | `True` | Следовать HTTP-редиректам |
+| `verify_ssl` | `bool` | `True` | Проверять SSL-сертификаты |
+| `max_workers` | `int` | `0` (авто) | Размер пула потоков (0=авто, 1=последовательно). Только sync. |
 
 ### komparu.compare_dir_urls(directory, url_map, **options) -> DirResult
 
@@ -188,6 +216,21 @@ result = komparu.compare_dir_urls(
     headers={"Authorization": "Bearer token"},
 )
 ```
+
+**Параметры:**
+
+| Имя | Тип | По умолчанию | Описание |
+|-----|-----|--------------|----------|
+| `dir_path` | `str` | обязателен | Путь к локальной директории |
+| `url_map` | `dict[str, str]` | обязателен | Маппинг relative_path → URL |
+| `chunk_size` | `int` | `65536` | Размер чанка в байтах |
+| `size_precheck` | `bool` | `True` | Сравнить размеры перед содержимым |
+| `quick_check` | `bool` | `True` | Проверить first/last/middle перед полным сканированием |
+| `headers` | `dict[str, str]` | `None` | Глобальные HTTP-заголовки |
+| `timeout` | `float` | `30.0` | HTTP-таймаут в секундах |
+| `follow_redirects` | `bool` | `True` | Следовать HTTP-редиректам |
+| `verify_ssl` | `bool` | `True` | Проверять SSL-сертификаты |
+| `max_workers` | `int` | `0` (авто) | Размер пула потоков (0=авто, 1=последовательно). Только sync. |
 
 ## Асинхронный API
 
@@ -248,11 +291,15 @@ class DiffReason(str, Enum):
 komparu.configure(
     # I/O
     chunk_size=65536,
-    max_workers=0,
+    max_workers=0,                         # 0 = авто (min(cpu, 8))
     timeout=30.0,
     follow_redirects=True,
     verify_ssl=True,
     size_precheck=True,
+    quick_check=True,
+
+    # HTTP
+    headers={},
 
     # Лимиты безопасности архивов
     max_decompressed_size=1 * 1024**3,    # 1 ГБ на архив
@@ -262,6 +309,9 @@ komparu.configure(
 
     # Общие лимиты
     comparison_timeout=300.0,              # 5 мин реального времени на вызов
+
+    # Защита от SSRF
+    allow_private_redirects=False,         # блокировка редиректов на приватные сети
 )
 ```
 

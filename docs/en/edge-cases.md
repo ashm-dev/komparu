@@ -60,7 +60,7 @@ Three-pass analysis. Every case has a status:
 | 38 | No `Content-Length` header | HANDLE | Skip size pre-check for this source. Chunk comparison works without it. |
 | 39 | Server returns wrong bytes for Range request | PLANNED | Verify `Content-Range` response header matches request. Mismatch → `SourceReadError`. |
 | 40 | Presigned URL expires mid-comparison | DETECT | HTTP 403 mid-stream → `SourceReadError` with context. Document: use sufficient TTL. |
-| 41 | Very slow server (trickle: 1 byte/sec) | HANDLE | `timeout` covers per-request time. `comparison_timeout` covers total wall-clock. |
+| 41 | Very slow server (trickle: 1 byte/sec) | HANDLE | `timeout` covers per-request time. `comparison_timeout` planned for total wall-clock. |
 | 42 | Server hangs (no response at all) | HANDLE | `timeout` → `SourceReadError`. |
 | 43 | Server closes connection after N requests | HANDLE | libcurl reconnects automatically. Connection pooling handles this. |
 | 44 | CDN returns different content from different edge nodes | DOCUMENT | Not detectable at our level. User responsibility. Can be mitigated with `quick_check=False` and pinning DNS, but outside our scope. |
@@ -117,7 +117,7 @@ Three-pass analysis. Every case has a status:
 | 80 | Hidden files (dotfiles) | HANDLE | Included by default. `exclude_hidden=True` option to skip. |
 | 81 | Deeply nested structure (>100 levels) | HANDLE | Iterative traversal (not recursive in stack). No stack overflow. |
 | 82 | Directory with 1M+ files | HANDLE | Streaming traversal in C. Memory = O(tree_depth), not O(file_count). |
-| 83 | Symlink loop (`/dir/link → /dir`) | HANDLE | Track visited `(dev, ino)`. Skip visited. Report as warning in result. |
+| 83 | Symlink loop (`/dir/link → /dir`) | PLANNED | Track visited `(dev, ino)`. Skip visited. Report as warning in result. |
 | 84 | Dangling symlink (target doesn't exist) | HANDLE | `on_error="report"`: `DiffReason.READ_ERROR`. `on_error="raise"`: `SourceReadError`. |
 | 85 | Permission denied on subdirectory | HANDLE | Same as #84. |
 | 86 | Permission denied on individual file | HANDLE | Same as #84. |
@@ -209,7 +209,7 @@ Three-pass analysis. Every case has a status:
 | 152 | Very large `chunk_size` (1 GB) | DOCUMENT | Allowed. Memory = `2 * chunk_size * max_workers`. User's choice. |
 | 153 | `timeout=0` | HANDLE | `ConfigError("timeout must be > 0 or None")`. |
 | 154 | `timeout < 0` | HANDLE | Same as #153. |
-| 155 | `comparison_timeout=0` | HANDLE | `ConfigError`. |
+| 155 | `comparison_timeout=0` | PLANNED | `ConfigError`. Wall-clock enforcement not yet implemented in C. |
 | 156 | Reserved | N/A | — |
 | 157 | Reserved | N/A | — |
 | 158 | `Source()` with local path | HANDLE | HTTP options ignored. File reader used. No error. |

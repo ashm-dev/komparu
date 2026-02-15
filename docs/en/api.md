@@ -162,6 +162,20 @@ all_same = komparu.compare_all([
 ])
 ```
 
+**Parameters:**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `sources` | `list[str \| Source]` | required | List of file paths, URLs, or Source objects |
+| `chunk_size` | `int` | `65536` | Chunk size in bytes |
+| `size_precheck` | `bool` | `True` | Compare sizes before content |
+| `quick_check` | `bool` | `True` | Sample first/last/middle before full scan |
+| `headers` | `dict[str, str]` | `None` | Global HTTP headers |
+| `timeout` | `float` | `30.0` | HTTP timeout in seconds |
+| `follow_redirects` | `bool` | `True` | Follow HTTP redirects |
+| `verify_ssl` | `bool` | `True` | Verify SSL certificates |
+| `max_workers` | `int` | `0` (auto) | Thread pool size (0=auto, 1=sequential). Sync only. |
+
 ### komparu.compare_many(sources, **options) -> CompareResult
 
 Detailed comparison of multiple sources.
@@ -173,6 +187,20 @@ result.all_equal          # bool
 result.groups             # list[set[str]] — groups of identical sources
 result.diff               # dict[tuple[str, str], bool] — pairwise results
 ```
+
+**Parameters:**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `sources` | `list[str \| Source]` | required | List of file paths, URLs, or Source objects |
+| `chunk_size` | `int` | `65536` | Chunk size in bytes |
+| `size_precheck` | `bool` | `True` | Compare sizes before content |
+| `quick_check` | `bool` | `True` | Sample first/last/middle before full scan |
+| `headers` | `dict[str, str]` | `None` | Global HTTP headers |
+| `timeout` | `float` | `30.0` | HTTP timeout in seconds |
+| `follow_redirects` | `bool` | `True` | Follow HTTP redirects |
+| `verify_ssl` | `bool` | `True` | Verify SSL certificates |
+| `max_workers` | `int` | `0` (auto) | Thread pool size (0=auto, 1=sequential). Sync only. |
 
 ### komparu.compare_dir_urls(directory, url_map, **options) -> DirResult
 
@@ -188,6 +216,21 @@ result = komparu.compare_dir_urls(
     headers={"Authorization": "Bearer token"},
 )
 ```
+
+**Parameters:**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `dir_path` | `str` | required | Path to local directory |
+| `url_map` | `dict[str, str]` | required | Mapping of relative_path to URL |
+| `chunk_size` | `int` | `65536` | Chunk size in bytes |
+| `size_precheck` | `bool` | `True` | Compare sizes before content |
+| `quick_check` | `bool` | `True` | Sample first/last/middle before full scan |
+| `headers` | `dict[str, str]` | `None` | Global HTTP headers |
+| `timeout` | `float` | `30.0` | HTTP timeout in seconds |
+| `follow_redirects` | `bool` | `True` | Follow HTTP redirects |
+| `verify_ssl` | `bool` | `True` | Verify SSL certificates |
+| `max_workers` | `int` | `0` (auto) | Thread pool size (0=auto, 1=sequential). Sync only. |
 
 ## Async API
 
@@ -248,11 +291,15 @@ class DiffReason(str, Enum):
 komparu.configure(
     # I/O
     chunk_size=65536,
-    max_workers=0,
+    max_workers=0,                         # 0 = auto (min(cpu, 8))
     timeout=30.0,
     follow_redirects=True,
     verify_ssl=True,
     size_precheck=True,
+    quick_check=True,
+
+    # HTTP
+    headers={},
 
     # Archive safety limits
     max_decompressed_size=1 * 1024**3,    # 1 GB per archive
@@ -262,6 +309,9 @@ komparu.configure(
 
     # General limits
     comparison_timeout=300.0,              # 5 min wall-clock per call
+
+    # SSRF protection
+    allow_private_redirects=False,         # block redirects to private networks
 )
 ```
 

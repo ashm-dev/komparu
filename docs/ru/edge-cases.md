@@ -59,7 +59,7 @@
 | 38 | Нет `Content-Length` заголовка | HANDLE | Пропускаем size pre-check для этого источника. Чанковое сравнение работает без него. |
 | 39 | Сервер возвращает неправильные байты для Range | PLANNED | Проверка `Content-Range` в ответе. Несовпадение → `SourceReadError`. |
 | 40 | Presigned URL истекает в процессе | DETECT | HTTP 403 в середине → `SourceReadError` с контекстом. Документируем: используйте достаточный TTL. |
-| 41 | Очень медленный сервер (1 байт/сек) | HANDLE | `timeout` для per-request. `comparison_timeout` для общего wall-clock. |
+| 41 | Очень медленный сервер (1 байт/сек) | HANDLE | `timeout` для per-request. `comparison_timeout` запланирован для общего wall-clock. |
 | 42 | Сервер зависает (без ответа) | HANDLE | `timeout` → `SourceReadError`. |
 | 43 | Сервер закрывает соединение после N запросов | HANDLE | libcurl переподключается автоматически. Connection pooling. |
 | 44 | CDN отдаёт разный контент с разных нод | DOCUMENT | Не определяемо на нашем уровне. Ответственность пользователя. |
@@ -116,7 +116,7 @@
 | 81 | Скрытые файлы (dotfiles) | HANDLE | Включены по умолчанию. `exclude_hidden=True` для пропуска. |
 | 82 | Глубоко вложенная структура (>100 уровней) | HANDLE | Итеративный обход (не рекурсивный в стеке). Без stack overflow. |
 | 83 | Директория с 1M+ файлов | HANDLE | Потоковый обход в C. Память = O(глубина дерева). |
-| 84 | Цикл симлинков | HANDLE | Трекинг `(dev, ino)`. Пропуск посещённых. Предупреждение в результате. |
+| 84 | Цикл симлинков | PLANNED | Трекинг `(dev, ino)`. Пропуск посещённых. Предупреждение в результате. |
 | 85 | Dangling симлинк | HANDLE | `on_error="report"`: `DiffReason.READ_ERROR`. `on_error="raise"`: `SourceReadError`. |
 | 86 | Нет доступа к поддиректории | HANDLE | Аналогично #85. |
 | 87 | Нет доступа к файлу | HANDLE | Аналогично #85. |
@@ -208,7 +208,7 @@
 | 153 | Очень большой `chunk_size` (1 ГБ) | DOCUMENT | Разрешено. Память = `2 * chunk_size * max_workers`. Выбор пользователя. |
 | 154 | `timeout=0` | HANDLE | `ConfigError("timeout must be > 0 or None")`. |
 | 155 | `timeout < 0` | HANDLE | Аналогично #154. |
-| 156 | `comparison_timeout=0` | HANDLE | `ConfigError`. |
+| 156 | `comparison_timeout=0` | PLANNED | `ConfigError`. Wall-clock enforcement пока не реализован в C. |
 | 157 | Зарезервировано | N/A | — |
 | 158 | Зарезервировано | N/A | — |
 | 159 | `Source()` с локальным путём | HANDLE | HTTP-опции игнорируются. File reader. Без ошибки. |
