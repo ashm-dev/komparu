@@ -94,6 +94,60 @@ else()
 endif()
 
 # =============================================================================
+# 4.5. Performance Optimizations
+#
+# This library builds from source on each user's machine, so -march=native
+# is safe and correct — it optimizes for the exact CPU the build runs on.
+# Sanitizer builds skip aggressive opts to preserve diagnostic accuracy.
+# =============================================================================
+
+if(NOT KOMPARU_SANITIZER)
+    if(MSVC)
+        target_compile_options(_core PRIVATE /O2 /Ob3 /GL /Gw /Gy)
+        target_link_options(_core PRIVATE /LTCG /OPT:REF /OPT:ICF)
+    else()
+        # -O3:                 max optimization (vectorization, unrolling, inlining)
+        # -march=native:       tune for the build host's CPU (AVX2, SSE4.2, etc.)
+        # -mtune=native:       schedule instructions for the build host
+        # -fomit-frame-pointer: free up a register
+        # -funroll-loops:      unroll small loops
+        # -fstrict-aliasing:   enable type-based alias analysis
+        # -fno-semantic-interposition: better optimization for shared objects
+        # -pipe:               use pipes between compiler stages
+        target_compile_options(_core PRIVATE
+            -O3
+            -march=native
+            -mtune=native
+            -fomit-frame-pointer
+            -funroll-loops
+            -fstrict-aliasing
+            -fno-semantic-interposition
+            -pipe
+            -DNDEBUG
+        )
+
+        # LTO: -flto=full for clang (whole-module), -flto for gcc
+        if(CMAKE_C_COMPILER_ID STREQUAL "Clang" OR CMAKE_C_COMPILER_ID STREQUAL "AppleClang")
+            target_compile_options(_core PRIVATE -flto=full)
+            target_link_options(_core PRIVATE -flto=full)
+            # Use lld for faster linking + better LTO (if available)
+            find_program(LLD_FOUND "ld.lld")
+            if(LLD_FOUND)
+                target_link_options(_core PRIVATE -fuse-ld=lld)
+            endif()
+        elseif(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+            target_compile_options(_core PRIVATE -flto)
+            target_link_options(_core PRIVATE -flto)
+        endif()
+    endif()
+else()
+    # Sanitizer builds: -O1 preserves enough debug info while catching bugs
+    if(NOT MSVC)
+        target_compile_options(_core PRIVATE -O1 -g)
+    endif()
+endif()
+
+# =============================================================================
 # 5. Platform-Specific Definitions
 # =============================================================================
 
