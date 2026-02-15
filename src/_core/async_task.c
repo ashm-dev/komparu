@@ -560,6 +560,7 @@ komparu_async_task_t *komparu_async_compare(
             for (size_t i = 0; i < count; i++) {
                 task->headers[i] = strdup(headers[i]);
                 if (!task->headers[i]) {
+                    task->header_count = i;
                     *err_msg = "out of memory";
                     task_free_internals(task);
                     free(task);
