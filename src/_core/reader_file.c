@@ -27,15 +27,15 @@ static _Thread_local char komparu_errbuf[256];
 static _Thread_local sigjmp_buf sigbus_jmpbuf;
 static _Thread_local volatile sig_atomic_t sigbus_armed = 0;
 
+/* Previous SIGBUS handler — chain to it when not armed */
+static struct sigaction old_sigbus_action;
+
 /**
  * SIGBUS signal handler.
  * If armed, longjmp back to the read function.
- * If not armed, re-raise with default handler (crash).
+ * If not armed, chain to previous handler (or default crash).
  */
 static void sigbus_handler(int sig, siginfo_t *info, void *ucontext) {
-    (void)info;
-    (void)ucontext;
-
     if (sigbus_armed) {
         int saved_errno = errno;
         sigbus_armed = 0;
@@ -43,9 +43,18 @@ static void sigbus_handler(int sig, siginfo_t *info, void *ucontext) {
         siglongjmp(sigbus_jmpbuf, 1);
     }
 
-    /* Not armed — this is a real crash. Restore default and re-raise. */
-    signal(SIGBUS, SIG_DFL);
-    raise(sig);
+    /* Not armed — chain to previous handler */
+    if (old_sigbus_action.sa_flags & SA_SIGINFO) {
+        if (old_sigbus_action.sa_sigaction)
+            old_sigbus_action.sa_sigaction(sig, info, ucontext);
+    } else {
+        if (old_sigbus_action.sa_handler == SIG_DFL) {
+            signal(SIGBUS, SIG_DFL);
+            raise(sig);
+        } else if (old_sigbus_action.sa_handler != SIG_IGN) {
+            old_sigbus_action.sa_handler(sig);
+        }
+    }
 }
 
 int komparu_sigbus_init(void) {
@@ -54,7 +63,7 @@ int komparu_sigbus_init(void) {
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = SA_SIGINFO;
 
-    if (sigaction(SIGBUS, &sa, NULL) != 0) {
+    if (sigaction(SIGBUS, &sa, &old_sigbus_action) != 0) {
         return -1;
     }
     return 0;

@@ -1075,6 +1075,7 @@ PyMODINIT_FUNC PyInit__core(void) {
         return NULL;
     }
     Py_AtExit(komparu_curl_share_cleanup);
+    Py_AtExit(komparu_compare_tls_cleanup);
 
     return PyModuleDef_Init(&module_def);
 }

@@ -30,15 +30,13 @@ static int ensure_buffers(size_t chunk_size, void **a, void **b) {
         return 0;
     }
     void *na = realloc(tl_buf_a, chunk_size);
-    void *nb = realloc(tl_buf_b, chunk_size);
-    if (!na || !nb) {
-        free(na); free(nb);
-        tl_buf_a = tl_buf_b = NULL;
-        tl_buf_cap = 0;
-        return -1;
-    }
+    if (!na) return -1;
     tl_buf_a = na;
+
+    void *nb = realloc(tl_buf_b, chunk_size);
+    if (!nb) return -1;
     tl_buf_b = nb;
+
     tl_buf_cap = chunk_size;
     *a = na;
     *b = nb;

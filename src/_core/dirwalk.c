@@ -108,17 +108,28 @@ void komparu_pathlist_free(komparu_pathlist_t *list) {
  * Recursive walker — uses fd-relative operations for performance
  * ========================================================================= */
 
+/* Guard against pathological directory depth (symlink cycles with
+ * follow_symlinks=true, or genuinely deep trees). 256 levels of nesting
+ * covers any real-world use case while preventing stack overflow. */
+#define KOMPARU_MAX_WALK_DEPTH 256
+
 static int walk_recursive(
     int parent_fd,          /* consumed — fdopendir takes ownership */
     const char *rel_prefix, /* "" for root */
     int stat_flags,
+    int depth,
     komparu_pathlist_t *result,
     const char **err_msg
 ) {
+    if (KOMPARU_UNLIKELY(depth > KOMPARU_MAX_WALK_DEPTH)) {
+        close(parent_fd);
+        *err_msg = "directory tree too deep (>256 levels)";
+        return -1;
+    }
     DIR *dir = fdopendir(parent_fd);
     if (KOMPARU_UNLIKELY(!dir)) {
         close(parent_fd);
-        strerror_r(errno, dirwalk_errbuf, sizeof(dirwalk_errbuf));
+        komparu_strerror(errno, dirwalk_errbuf, sizeof(dirwalk_errbuf));
         *err_msg = dirwalk_errbuf;
         return -1;
     }
@@ -159,7 +170,7 @@ static int walk_recursive(
             int sub_fd = openat(dfd, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
             if (KOMPARU_UNLIKELY(sub_fd < 0)) continue;
 
-            if (KOMPARU_UNLIKELY(walk_recursive(sub_fd, rel_path, stat_flags, result, err_msg) != 0)) {
+            if (KOMPARU_UNLIKELY(walk_recursive(sub_fd, rel_path, stat_flags, depth + 1, result, err_msg) != 0)) {
                 closedir(dir);
                 return -1;
             }
@@ -180,14 +191,14 @@ int komparu_dirwalk(
 
     int fd = open(base_dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (KOMPARU_UNLIKELY(fd < 0)) {
-        strerror_r(errno, dirwalk_errbuf, sizeof(dirwalk_errbuf));
+        komparu_strerror(errno, dirwalk_errbuf, sizeof(dirwalk_errbuf));
         *err_msg = dirwalk_errbuf;
         return -1;
     }
 
     int stat_flags = follow_symlinks ? 0 : AT_SYMLINK_NOFOLLOW;
 
-    if (KOMPARU_UNLIKELY(walk_recursive(fd, "", stat_flags, result, err_msg) != 0)) {
+    if (KOMPARU_UNLIKELY(walk_recursive(fd, "", stat_flags, 0, result, err_msg) != 0)) {
         komparu_pathlist_free(result);
         return -1;
     }
