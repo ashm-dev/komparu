@@ -64,7 +64,7 @@ def compare(
     :param source_b: File path, URL, or Source object.
     :param chunk_size: Chunk size in bytes.
     :param size_precheck: Compare sizes before content.
-    :param quick_check: Sample first/last/middle before full scan.
+    :param quick_check: Sample key offsets before full scan.
     :param headers: Global HTTP headers for URL sources.
     :param timeout: HTTP timeout in seconds.
     :param follow_redirects: Follow HTTP redirects.
@@ -121,7 +121,7 @@ def compare_dir(
     :param dir_b: Path to second directory.
     :param chunk_size: Chunk size for file comparison.
     :param size_precheck: Compare file sizes before content.
-    :param quick_check: Sample first/last/middle before full scan.
+    :param quick_check: Sample key offsets before full scan.
     :param follow_symlinks: Follow symbolic links during traversal.
     :param max_workers: Thread pool size (0=auto, 1=sequential).
     :returns: DirResult with equal, diff, only_left, only_right.

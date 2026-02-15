@@ -100,7 +100,7 @@ komparu.compare("file_a", "file_b", chunk_size=131072)  # 128 KB
 | `size_precheck` | `bool` | `True` | Compare sizes before content |
 | `follow_redirects` | `bool` | `True` | Follow HTTP redirects |
 | `verify_ssl` | `bool` | `True` | Verify SSL certificates |
-| `quick_check` | `bool` | `True` | Sample first/last/middle chunks before full comparison (seekable sources only) |
+| `quick_check` | `bool` | `True` | Sample key offsets before full comparison (seekable sources only) |
 | `proxy` | `str` | `None` | Proxy URL (e.g. `http://host:port`, `socks5://host:port`) |
 
 **Priority:** Function parameters are the defaults. `Source().headers` override the `headers` parameter. `configure()` sets fallback `headers` and SSRF protection (`allow_private_redirects`).
@@ -128,7 +128,7 @@ else:
 | `dir_b` | `str` | required | Second directory path |
 | `chunk_size` | `int` | `65536` | Chunk size in bytes |
 | `size_precheck` | `bool` | `True` | Compare sizes before content |
-| `quick_check` | `bool` | `True` | Sample first/last/middle before full scan |
+| `quick_check` | `bool` | `True` | Sample key offsets before full scan |
 | `follow_symlinks` | `bool` | `True` | Follow symbolic links |
 | `max_workers` | `int` | `0` (auto) | Thread pool size (0=auto, 1=sequential) |
 
@@ -171,7 +171,7 @@ all_same = komparu.compare_all([
 | `sources` | `list[str \| Source]` | required | List of file paths, URLs, or Source objects |
 | `chunk_size` | `int` | `65536` | Chunk size in bytes |
 | `size_precheck` | `bool` | `True` | Compare sizes before content |
-| `quick_check` | `bool` | `True` | Sample first/last/middle before full scan |
+| `quick_check` | `bool` | `True` | Sample key offsets before full scan |
 | `headers` | `dict[str, str]` | `None` | Global HTTP headers |
 | `timeout` | `float` | `30.0` | HTTP timeout in seconds |
 | `follow_redirects` | `bool` | `True` | Follow HTTP redirects |
@@ -198,7 +198,7 @@ result.diff               # dict[tuple[str, str], bool] — pairwise results
 | `sources` | `list[str \| Source]` | required | List of file paths, URLs, or Source objects |
 | `chunk_size` | `int` | `65536` | Chunk size in bytes |
 | `size_precheck` | `bool` | `True` | Compare sizes before content |
-| `quick_check` | `bool` | `True` | Sample first/last/middle before full scan |
+| `quick_check` | `bool` | `True` | Sample key offsets before full scan |
 | `headers` | `dict[str, str]` | `None` | Global HTTP headers |
 | `timeout` | `float` | `30.0` | HTTP timeout in seconds |
 | `follow_redirects` | `bool` | `True` | Follow HTTP redirects |
@@ -229,7 +229,7 @@ result = komparu.compare_dir_urls(
 | `url_map` | `dict[str, str]` | required | Mapping of relative_path to URL |
 | `chunk_size` | `int` | `65536` | Chunk size in bytes |
 | `size_precheck` | `bool` | `True` | Compare sizes before content |
-| `quick_check` | `bool` | `True` | Sample first/last/middle before full scan |
+| `quick_check` | `bool` | `True` | Sample key offsets before full scan |
 | `headers` | `dict[str, str]` | `None` | Global HTTP headers |
 | `timeout` | `float` | `30.0` | HTTP timeout in seconds |
 | `follow_redirects` | `bool` | `True` | Follow HTTP redirects |

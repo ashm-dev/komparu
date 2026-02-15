@@ -111,7 +111,7 @@ When modifying documentation, update both English and Russian versions.
 
 1. **C23 core** — all I/O in C, Python is just a wrapper
 2. **mmap + MADV_SEQUENTIAL** — zero-copy with kernel readahead
-3. **Quick check** — samples first/last/middle bytes before full scan
+3. **Quick check** — samples up to 5 key offsets (start, end, 25%, 50%, 75%) before full scan
 4. **pthread pool** — native threads for parallel comparison
 5. **eventfd/pipe + asyncio.loop.add_reader()** — native async without Python threads
 6. **CAS-based task lifecycle** — RUNNING -> DONE or RUNNING -> ORPHANED for safe cancellation

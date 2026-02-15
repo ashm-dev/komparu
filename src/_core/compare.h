@@ -36,7 +36,7 @@ komparu_result_t komparu_compare(
 );
 
 /**
- * Quick check: sample first, last, and middle chunks before full scan.
+ * Quick check: sample up to 5 offsets (start, end, 25%, 50%, 75%) before full scan.
  * Only works if both readers support seek.
  *
  * Returns:

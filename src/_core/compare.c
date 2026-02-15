@@ -3,7 +3,7 @@
  *
  * Algorithm:
  * 1. Size pre-check (if both sizes known and differ → DIFFERENT)
- * 2. Optional quick check (sample first/last/middle)
+ * 2. Optional quick check (sample start/end/25%/50%/75%)
  * 3. Sequential chunk read + memcmp until EOF or difference
  *
  * Memory: O(chunk_size) — two buffers only.

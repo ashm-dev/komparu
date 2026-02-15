@@ -65,7 +65,7 @@ JSON results are saved to `results/` for independent verification.
 ### File Comparison
 - **identical**: Both files byte-identical (worst case for comparison — must read everything)
 - **differ_first**: First byte differs (best case — early exit)
-- **differ_quarter**: Byte at 25% offset differs (quick_check misses it — honest sequential scan)
+- **differ_quarter**: Byte at 25% offset differs (quick_check now catches this with 5-point sampling)
 - **differ_last**: Last byte differs (quick_check catches it — O(1) for komparu)
 - **Sizes**: 1MB, 10MB, 100MB, 1GB
 
@@ -77,8 +77,8 @@ JSON results are saved to `results/` for independent verification.
 ## Understanding the Results
 
 ### Why komparu is fast on "differ_last" scenarios
-komparu uses a **quick_check** strategy that samples the first, last, and middle
-bytes of each file before doing a full sequential comparison. This means it can
+komparu uses a **quick_check** strategy that samples up to 5 key offsets (start,
+end, 25%, 50%, 75%) of each file before doing a full sequential comparison. This means it can
 detect many differences in O(1) time instead of O(n). This is a real optimization
 that benefits real-world workloads — most file changes modify the end of the file
 (e.g., appended data, updated timestamps in binary formats).
@@ -87,10 +87,10 @@ Other tools (filecmp, cmp, Go, Rust) read files sequentially from the beginning,
 so they must read the entire file to find a difference at the end.
 
 ### Why "differ_quarter" is the honest comparison
-The **differ_quarter** scenario places the difference at 25% of the file — a position
-that quick_check does NOT sample (it only checks 0%, 50%, 100%). This forces komparu
-into a full sequential mmap+memcmp scan, showing its raw I/O performance without
-any shortcut. This is the fairest apples-to-apples comparison of I/O engines.
+The **differ_quarter** scenario places the difference at 25% of the file. With 5-point
+sampling (start, end, 25%, 50%, 75%), quick_check now catches this in O(1) for files
+larger than 4 chunks (256KB with default 64KB chunks). Earlier benchmark results were
+recorded with 3-point sampling where this position was not sampled.
 
 ### Why filecmp is faster on "differ_first" for small files
 filecmp uses a simple buffered read with minimal setup overhead. For very small

@@ -54,7 +54,7 @@ def configure(**kwargs) -> None:
     :param follow_redirects: Follow HTTP redirects.
     :param verify_ssl: Verify SSL certificates.
     :param size_precheck: Compare sizes before content.
-    :param quick_check: Sample first/last/middle before full scan.
+    :param quick_check: Sample key offsets before full scan.
     :param headers: Global HTTP headers.
     :param max_decompressed_size: Max decompressed bytes per archive (None = no limit).
     :param max_compression_ratio: Max compression ratio (None = no limit).

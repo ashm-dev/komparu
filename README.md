@@ -7,7 +7,7 @@ Ultra-fast file comparison library with a C23 core. Compares local files, direct
 ## Features
 
 - **mmap + MADV_SEQUENTIAL** — zero-copy reads with kernel readahead hints
-- **Quick check** — samples first/last/middle bytes before full scan (catches most differences in O(1))
+- **Quick check** — samples up to 5 key offsets (start, end, 25%, 50%, 75%) before full scan (catches most differences in O(1))
 - **Size precheck** — skips content comparison when file sizes differ
 - **Parallel directory comparison** — native pthread pool, configurable worker count
 - **Archive comparison** — entry-by-entry comparison of tar/zip/gz/bz2/xz via libarchive
@@ -81,7 +81,7 @@ The async API uses C threads + eventfd/pipe integrated with `asyncio.loop.add_re
 komparu.configure(
     chunk_size=65536,          # bytes per read (default: 64KB)
     size_precheck=True,        # compare sizes first
-    quick_check=True,          # sample first/last/middle bytes
+    quick_check=True,          # sample key offsets before full scan
     max_workers=0,             # thread pool size (0 = auto)
     timeout=30.0,              # HTTP timeout in seconds
     follow_redirects=True,     # follow HTTP redirects
@@ -136,7 +136,7 @@ komparu is consistently at the bottom (fastest). For identical files it is **1.3
   <img src="benchmarks/charts/file_differ_quarter.png" width="700" alt="Differ at 25% benchmark">
 </p>
 
-The fairest comparison: difference at 25% of the file, a position **quick_check does NOT sample**. komparu must do a real sequential mmap+memcmp scan here, showing its raw I/O advantage without any shortcuts.
+Since v0.1.0 quick_check samples at 25%, so this difference is now caught in O(1). Benchmarks below were recorded with the older 3-point quick_check and show the raw sequential mmap+memcmp scan performance.
 
 ### File Comparison: Last Byte Differs (Quick Check)
 
@@ -144,7 +144,7 @@ The fairest comparison: difference at 25% of the file, a position **quick_check 
   <img src="benchmarks/charts/file_differ_last.png" width="700" alt="Last byte differs benchmark">
 </p>
 
-komparu's **quick_check** samples first/last/middle bytes before scanning. This catches differ-at-end instantly (**30us for 1GB**) while all competitors must read the entire file. The flat red line is O(1) regardless of file size.
+komparu's **quick_check** samples up to 5 key offsets before scanning. This catches differ-at-end instantly (**30us for 1GB**) while all competitors must read the entire file. The flat red line is O(1) regardless of file size.
 
 ### Directory Comparison
 
