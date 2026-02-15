@@ -14,6 +14,37 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* =========================================================================
+ * Thread-local comparison buffers — avoid malloc/free per comparison.
+ * Each worker thread gets its own pair. Resized only when chunk_size grows.
+ * ========================================================================= */
+
+static _Thread_local void *tl_buf_a = NULL;
+static _Thread_local void *tl_buf_b = NULL;
+static _Thread_local size_t tl_buf_cap = 0;
+
+static int ensure_buffers(size_t chunk_size, void **a, void **b) {
+    if (KOMPARU_LIKELY(chunk_size <= tl_buf_cap)) {
+        *a = tl_buf_a;
+        *b = tl_buf_b;
+        return 0;
+    }
+    void *na = realloc(tl_buf_a, chunk_size);
+    void *nb = realloc(tl_buf_b, chunk_size);
+    if (!na || !nb) {
+        free(na); free(nb);
+        tl_buf_a = tl_buf_b = NULL;
+        tl_buf_cap = 0;
+        return -1;
+    }
+    tl_buf_a = na;
+    tl_buf_b = nb;
+    tl_buf_cap = chunk_size;
+    *a = na;
+    *b = nb;
+    return 0;
+}
+
 komparu_result_t komparu_compare(
     komparu_reader_t *reader_a,
     komparu_reader_t *reader_b,
@@ -41,12 +72,9 @@ komparu_result_t komparu_compare(
         }
     }
 
-    /* Allocate comparison buffers */
-    void *buf_a = malloc(chunk_size);
-    void *buf_b = malloc(chunk_size);
-    if (!buf_a || !buf_b) {
-        free(buf_a);
-        free(buf_b);
+    /* Thread-local comparison buffers (no malloc/free per call) */
+    void *buf_a, *buf_b;
+    if (ensure_buffers(chunk_size, &buf_a, &buf_b) != 0) {
         *err_msg = "out of memory";
         return KOMPARU_ERROR;
     }
@@ -93,8 +121,6 @@ komparu_result_t komparu_compare(
         }
     }
 
-    free(buf_a);
-    free(buf_b);
     return result;
 }
 
@@ -128,17 +154,14 @@ komparu_result_t komparu_quick_check(
         return KOMPARU_ERROR; /* Seek not supported */
     }
 
-    void *buf_a = malloc(chunk_size);
-    void *buf_b = malloc(chunk_size);
-    if (!buf_a || !buf_b) {
-        free(buf_a);
-        free(buf_b);
+    void *buf_a, *buf_b;
+    if (ensure_buffers(chunk_size, &buf_a, &buf_b) != 0) {
         *err_msg = "out of memory";
         return KOMPARU_ERROR;
     }
 
-    /* Sample points: start, end, middle */
-    int64_t sample_offsets[3];
+    /* Sample points: start, end, 25%, 50%, 75% */
+    int64_t sample_offsets[5];
     int num_samples = 0;
 
     /* Always check start */
@@ -151,10 +174,13 @@ komparu_result_t komparu_quick_check(
         sample_offsets[num_samples++] = end_offset;
     }
 
-    /* Check middle if file is larger than two chunks */
-    if (size_a > (int64_t)(chunk_size * 2)) {
-        int64_t mid_offset = size_a / 2;
-        sample_offsets[num_samples++] = mid_offset;
+    /* Check 25%, 50%, 75% if file is large enough */
+    if (size_a > (int64_t)(chunk_size * 4)) {
+        sample_offsets[num_samples++] = size_a / 4;
+        sample_offsets[num_samples++] = size_a / 2;
+        sample_offsets[num_samples++] = (size_a * 3) / 4;
+    } else if (size_a > (int64_t)(chunk_size * 2)) {
+        sample_offsets[num_samples++] = size_a / 2;
     }
 
     komparu_result_t result = KOMPARU_EQUAL;
@@ -181,9 +207,6 @@ komparu_result_t komparu_quick_check(
             break;
         }
     }
-
-    free(buf_a);
-    free(buf_b);
 
     /* Reset readers to start for subsequent full comparison */
     if (result == KOMPARU_EQUAL && reader_a->seek && reader_b->seek) {
