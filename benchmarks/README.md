@@ -20,48 +20,45 @@ Statistically rigorous benchmarks comparing komparu against file comparison tool
 - **No mmap handicap**: Go/Rust use standard read() — represents typical real-world code
 - **tmpfs data**: All test files in /dev/shm to eliminate disk I/O variance
 - **Page cache warm**: All files read into cache before measurement begins
-- **Statistical rigor**: pyperf with multiple processes, warmup, outlier detection
+- **Statistical rigor**: 20 samples per benchmark, auto-calibrated loops, warmup runs
 - **Open source**: All competitor source code included in `competitors/`
-- **Subprocess overhead**: CLI tools (cmp, diff, Go, Rust) measured via `pyperf bench_command()` which includes process startup; this is documented as a caveat
+- **Subprocess overhead**: CLI tools (cmp, diff, Go, Rust) measured via subprocess; this is documented as a caveat
 
 ## Methodology
 
-All benchmarks use [pyperf](https://github.com/psutil/pyperf):
+Custom timing harness with statistical rigor:
 
-- **Python functions**: `pyperf.Runner.bench_func()` — measures pure function call time
-- **CLI/compiled tools**: `pyperf.Runner.bench_command()` — measures full subprocess execution
-- **Processes**: 10 per benchmark (5 in --fast mode)
-- **Values**: 5 per process (2 in --fast mode)
-- **Warmup**: 1 value per process (auto-calibrated)
-- **Statistics**: mean, median, stdev reported; pyperf handles outlier detection
+- **Python functions**: `time.perf_counter()` with auto-calibrated loop count (>= 0.5s per repeat)
+- **CLI/compiled tools**: `subprocess.run()` with `time.perf_counter()` per invocation
+- **Warmup**: 3 runs before measurement (2 for directory benchmarks)
+- **Samples**: 20 per benchmark (5 in --fast mode)
+- **Statistics**: mean, median, stdev, min, max reported
+- **Charts**: matplotlib xkcd style (`gen_charts.py`)
 
 ## Running
 
 ```bash
-# Prerequisites
-pip install pyperf
+# Build competitors
 cd benchmarks/competitors && make all && cd ..
 
-# Full suite (takes ~30-60 minutes)
+# Full suite (~30 minutes)
 python run_all.py
 
-# Quick validation (~5-10 minutes)
+# Quick validation (~5 minutes)
 python run_all.py --fast
 
 # Individual benchmarks
 python bench_file.py --fast
 python bench_file.py --size 10MB --scenario identical
 python bench_dir.py --fast
+
+# Regenerate charts
+python gen_charts.py
 ```
 
 ## Results
 
-Raw pyperf JSON files are saved to `results/` for independent verification.
-Use `pyperf compare_to` to compare any two result files:
-
-```bash
-pyperf compare_to results/file_10MB_identical_komparu.json results/file_10MB_identical_filecmp.json
-```
+JSON results are saved to `results/` for independent verification.
 
 ## Test Scenarios
 

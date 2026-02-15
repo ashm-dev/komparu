@@ -1,3 +1,5 @@
+**English** | [Русский](README.ru.md)
+
 # komparu
 
 Ultra-fast file comparison library with a C23 core. Compares local files, directories, archives, and HTTP resources byte-by-byte using memory-mapped I/O, vectorized operations, and a native thread pool.
@@ -187,6 +189,15 @@ python run_all.py          # ~30 min full suite
 ```
 
 See [`benchmarks/README.md`](benchmarks/README.md) for methodology details.
+
+## Documentation
+
+- [API Reference](docs/en/api.md)
+- [Architecture](docs/en/architecture.md)
+- [Requirements](docs/en/requirements.md)
+- [Security](docs/en/security.md)
+- [Edge Cases](docs/en/edge-cases.md)
+- [Workplan](docs/en/workplan.md)
 
 ## Architecture
 

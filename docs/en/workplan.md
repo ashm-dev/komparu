@@ -87,10 +87,11 @@
 
 **Goal:** Production-ready release on PyPI.
 
-- [ ] README.md (English), README.ru.md (Russian)
+- [x] README.md (English), README.ru.md (Russian)
+- [x] CLAUDE.md
 - [ ] reST docstrings on all public API
 - [ ] Type stubs / py.typed
-- [ ] Benchmark suite: local, HTTP, parallel
+- [x] Benchmark suite with charts (Go, Rust, filecmp, cmp, hashlib)
 - [ ] Dockerfile
 - [ ] LICENSE (MIT)
 - [ ] PyPI publish workflow
