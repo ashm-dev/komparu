@@ -142,8 +142,8 @@ result = komparu.compare_archive("backup_v1.tar.gz", "backup_v2.zip")
 
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
-| `archive_a` | `str` | required | First archive path |
-| `archive_b` | `str` | required | Second archive path |
+| `path_a` | `str` | required | First archive path |
+| `path_b` | `str` | required | Second archive path |
 | `chunk_size` | `int` | `65536` | Chunk size in bytes |
 | `max_decompressed_size` | `int` | `1 GB` | Max total decompressed bytes |
 | `max_compression_ratio` | `int` | `200` | Max compression ratio |

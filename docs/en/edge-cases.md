@@ -190,8 +190,8 @@ Three-pass analysis. Every case has a status:
 | 138 | `max_workers` > number of file pairs | HANDLE | Extra workers idle. No harm. |
 | 139 | Two parallel comparisons using same source | HANDLE | Each opens own file descriptor / HTTP connection. No shared state. |
 | 140 | File descriptor exhaustion under parallelism | HANDLE | Each worker uses ≤2 FDs. Max FDs = `max_workers * 2`. Default 16. Manageable. |
-| 141 | Signal (SIGINT/SIGTERM) during comparison | HANDLE | C code checks for `PyErr_CheckSignals()` between chunks. Clean shutdown. |
-| 142 | `KeyboardInterrupt` in Python | HANDLE | GIL acquire → `PyErr_CheckSignals()` → `KeyboardInterrupt` propagates. Thread pool cleans up. |
+| 141 | Signal (SIGINT/SIGTERM) during comparison | PLANNED | Add `PyErr_CheckSignals()` between chunks in C for clean shutdown. |
+| 142 | `KeyboardInterrupt` in Python | PLANNED | GIL acquire → `PyErr_CheckSignals()` → `KeyboardInterrupt` propagation. Depends on #141. |
 | 143 | Exception in one worker thread | HANDLE | Collect exception. Cancel remaining tasks. Report first error. |
 | 144 | Thread safety of libcurl handles | HANDLE | Each thread gets own `CURL*` handle. No sharing. |
 | 145 | Thread safety of libarchive | HANDLE | Each thread gets own `archive*` handle. No sharing. |

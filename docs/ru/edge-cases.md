@@ -189,8 +189,8 @@
 | 139 | `max_workers` > количество пар файлов | HANDLE | Лишние воркеры простаивают. Безвредно. |
 | 140 | Два параллельных сравнения одного источника | HANDLE | Каждый открывает свой FD / HTTP connection. Нет разделяемого состояния. |
 | 141 | Исчерпание файловых дескрипторов | HANDLE | Каждый воркер ≤2 FD. Макс: `max_workers * 2`. По умолчанию 16. |
-| 142 | Сигнал (SIGINT/SIGTERM) | HANDLE | C-код проверяет `PyErr_CheckSignals()` между чанками. Чистое завершение. |
-| 143 | `KeyboardInterrupt` | HANDLE | GIL acquire → `PyErr_CheckSignals()` → `KeyboardInterrupt` пробрасывается. Пул чистится. |
+| 142 | Сигнал (SIGINT/SIGTERM) | PLANNED | Добавить `PyErr_CheckSignals()` между чанками в C для чистого завершения. |
+| 143 | `KeyboardInterrupt` | PLANNED | GIL acquire → `PyErr_CheckSignals()` → `KeyboardInterrupt` проброс. Зависит от #142. |
 | 144 | Исключение в одном воркере | HANDLE | Собираем исключение. Отменяем остальные задачи. Возвращаем первую ошибку. |
 | 145 | Thread safety libcurl handles | HANDLE | Каждый поток — свой `CURL*`. Без sharing. |
 | 146 | Thread safety libarchive | HANDLE | Каждый поток — свой `archive*`. Без sharing. |

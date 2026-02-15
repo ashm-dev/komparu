@@ -142,8 +142,8 @@ result = komparu.compare_archive("backup_v1.tar.gz", "backup_v2.zip")
 
 | Имя | Тип | По умолчанию | Описание |
 |-----|-----|--------------|----------|
-| `archive_a` | `str` | обязателен | Первый архив |
-| `archive_b` | `str` | обязателен | Второй архив |
+| `path_a` | `str` | обязателен | Первый архив |
+| `path_b` | `str` | обязателен | Второй архив |
 | `chunk_size` | `int` | `65536` | Размер чанка в байтах |
 | `max_decompressed_size` | `int` | `1 GB` | Макс. распакованный объём |
 | `max_compression_ratio` | `int` | `200` | Макс. степень сжатия |
