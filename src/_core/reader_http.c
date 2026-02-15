@@ -342,6 +342,7 @@ komparu_reader_t *komparu_reader_http_open(
     return komparu_reader_http_open_ex(
         url, headers, timeout, follow_redirects, verify_ssl,
         false, /* allow_private = false by default */
+        NULL,  /* proxy = direct connection */
         err_msg
     );
 }
@@ -353,6 +354,7 @@ komparu_reader_t *komparu_reader_http_open_ex(
     bool follow_redirects,
     bool verify_ssl,
     bool allow_private,
+    const char *proxy,
     const char **err_msg
 ) {
     /* Allocate structures */
@@ -422,6 +424,11 @@ komparu_reader_t *komparu_reader_http_open_ex(
             ctx->headers = curl_slist_append(ctx->headers, *h);
         }
         curl_easy_setopt(ctx->easy, CURLOPT_HTTPHEADER, ctx->headers);
+    }
+
+    /* ---- Proxy ---- */
+    if (proxy) {
+        curl_easy_setopt(ctx->easy, CURLOPT_PROXY, proxy);
     }
 
     /* ---- SSRF protection ---- */

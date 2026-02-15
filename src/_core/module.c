@@ -13,7 +13,6 @@
 #include "dirwalk.h"
 #include "reader_archive.h"
 #include "async_task.h"
-#include "async_curl.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -102,13 +101,14 @@ static komparu_reader_t *open_reader(
     int follow_redirects,
     int verify_ssl,
     int allow_private,
+    const char *proxy,
     const char **err_msg
 ) {
     if (is_url(source)) {
         return komparu_reader_http_open_ex(
             source, header_array,
             timeout, (bool)follow_redirects, (bool)verify_ssl,
-            (bool)allow_private,
+            (bool)allow_private, proxy,
             err_msg
         );
     }
@@ -134,17 +134,18 @@ static PyObject *py_compare(PyObject *self, PyObject *args, PyObject *kwargs) {
     int follow_redirects = 1;
     int verify_ssl = 1;
     int allow_private = 0;
+    const char *proxy = NULL;
 
     static char *kwlist[] = {
         "source_a", "source_b", "chunk_size", "size_precheck", "quick_check",
         "headers", "timeout", "follow_redirects", "verify_ssl", "allow_private",
-        NULL
+        "proxy", NULL
     };
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ss|nppOdppp", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ss|nppOdpppz", kwlist,
             &source_a, &source_b, &chunk_size, &size_precheck, &quick_check,
             &py_headers, &timeout, &follow_redirects, &verify_ssl,
-            &allow_private)) {
+            &allow_private, &proxy)) {
         return NULL;
     }
 
@@ -172,9 +173,11 @@ static PyObject *py_compare(PyObject *self, PyObject *args, PyObject *kwargs) {
     /* Copy source strings — PyArg strings are only valid while GIL is held */
     char *src_a = strdup(source_a);
     char *src_b = strdup(source_b);
-    if (!src_a || !src_b) {
+    char *proxy_copy = proxy ? strdup(proxy) : NULL;
+    if (!src_a || !src_b || (proxy && !proxy_copy)) {
         free(src_a);
         free(src_b);
+        free(proxy_copy);
         free_header_array(header_array, header_count);
         PyErr_NoMemory();
         return NULL;
@@ -196,12 +199,12 @@ static PyObject *py_compare(PyObject *self, PyObject *args, PyObject *kwargs) {
     KOMPARU_GIL_RELEASE()
 
     reader_a = open_reader(
-        src_a, header_array, timeout, follow_redirects, verify_ssl, allow_private, &err_msg
+        src_a, header_array, timeout, follow_redirects, verify_ssl, allow_private, proxy_copy, &err_msg
     );
     if (!reader_a) goto open_failed;
 
     reader_b = open_reader(
-        src_b, header_array, timeout, follow_redirects, verify_ssl, allow_private, &err_msg
+        src_b, header_array, timeout, follow_redirects, verify_ssl, allow_private, proxy_copy, &err_msg
     );
     if (!reader_b) goto open_failed;
 
@@ -235,6 +238,7 @@ done:
     if (reader_a) reader_a->close(reader_a);
     if (reader_b) reader_b->close(reader_b);
     free_header_array(header_array, header_count);
+    free(proxy_copy);
 
     /* Convert result to Python */
     switch (result) {
@@ -556,17 +560,18 @@ static PyObject *py_async_compare_start(PyObject *self, PyObject *args, PyObject
     int follow_redirects = 1;
     int verify_ssl = 1;
     int allow_private = 0;
+    const char *proxy = NULL;
 
     static char *kwlist[] = {
         "source_a", "source_b", "chunk_size", "size_precheck", "quick_check",
         "headers", "timeout", "follow_redirects", "verify_ssl", "allow_private",
-        NULL
+        "proxy", NULL
     };
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ss|nppOdppp", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ss|nppOdpppz", kwlist,
             &source_a, &source_b, &chunk_size, &size_precheck, &quick_check,
             &py_headers, &timeout, &follow_redirects, &verify_ssl,
-            &allow_private)) {
+            &allow_private, &proxy)) {
         return NULL;
     }
 
@@ -594,7 +599,7 @@ static PyObject *py_async_compare_start(PyObject *self, PyObject *args, PyObject
         source_a, source_b, header_array,
         (size_t)chunk_size, (bool)size_precheck, (bool)quick_check,
         timeout, (bool)follow_redirects, (bool)verify_ssl, (bool)allow_private,
-        &err_msg
+        proxy, &err_msg
     );
 
     free_header_array(header_array, header_count);
@@ -805,17 +810,18 @@ static PyObject *py_async_compare_dir_urls_start(PyObject *self, PyObject *args,
     int follow_redirects = 1;
     int verify_ssl = 1;
     int allow_private = 0;
+    const char *proxy = NULL;
 
     static char *kwlist[] = {
         "dir_path", "url_map", "chunk_size", "size_precheck", "quick_check",
         "headers", "timeout", "follow_redirects", "verify_ssl", "allow_private",
-        NULL
+        "proxy", NULL
     };
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "sO|nppOdppp", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "sO|nppOdpppz", kwlist,
             &dir_path, &py_url_map, &chunk_size, &size_precheck, &quick_check,
             &py_headers, &timeout, &follow_redirects, &verify_ssl,
-            &allow_private)) {
+            &allow_private, &proxy)) {
         return NULL;
     }
 
@@ -876,7 +882,7 @@ static PyObject *py_async_compare_dir_urls_start(PyObject *self, PyObject *args,
         header_array,
         (size_t)chunk_size, (bool)size_precheck, (bool)quick_check,
         timeout, (bool)follow_redirects, (bool)verify_ssl, (bool)allow_private,
-        &err_msg);
+        proxy, &err_msg);
 
     free(rel_paths);
     free(url_strs);
@@ -922,170 +928,6 @@ static PyObject *py_async_compare_dir_urls_result(PyObject *self, PyObject *arg)
 }
 
 /* =========================================================================
- * Async HTTP — libcurl multi wrappers for asyncio integration
- * ========================================================================= */
-
-static void async_http_capsule_destructor(PyObject *capsule) {
-    komparu_async_http_t *h = PyCapsule_GetPointer(capsule, "komparu.async_http");
-    if (h) komparu_async_http_close(h);
-}
-
-static PyObject *py_async_http_open(PyObject *self, PyObject *args) {
-    (void)self;
-    const char *url;
-    PyObject *py_headers;
-    double timeout;
-    int follow_redirects, verify_ssl, allow_private;
-
-    if (!PyArg_ParseTuple(args, "sOdppp",
-            &url, &py_headers, &timeout,
-            &follow_redirects, &verify_ssl, &allow_private))
-        return NULL;
-
-    const char *err_msg = NULL;
-    size_t header_count = 0;
-    const char **header_array = build_header_array(py_headers, &header_count, &err_msg);
-    if (err_msg) {
-        PyErr_SetString(PyExc_ValueError, err_msg);
-        return NULL;
-    }
-
-    komparu_async_http_t *h = komparu_async_http_open(
-        url, header_array, timeout,
-        (bool)follow_redirects, (bool)verify_ssl, (bool)allow_private,
-        &err_msg);
-
-    free_header_array(header_array, header_count);
-
-    if (!h) {
-        PyErr_SetString(PyExc_RuntimeError,
-                        err_msg ? err_msg : "async_http_open failed");
-        return NULL;
-    }
-
-    return PyCapsule_New(h, "komparu.async_http", async_http_capsule_destructor);
-}
-
-static komparu_async_http_t *get_async_http(PyObject *capsule) {
-    komparu_async_http_t *h = PyCapsule_GetPointer(capsule, "komparu.async_http");
-    if (!h) PyErr_SetString(PyExc_ValueError, "invalid async HTTP handle");
-    return h;
-}
-
-static PyObject *py_async_http_fileno(PyObject *self, PyObject *arg) {
-    (void)self;
-    komparu_async_http_t *h = get_async_http(arg);
-    if (!h) return NULL;
-    return PyLong_FromLong(komparu_async_http_fileno(h));
-}
-
-static PyObject *py_async_http_events(PyObject *self, PyObject *arg) {
-    (void)self;
-    komparu_async_http_t *h = get_async_http(arg);
-    if (!h) return NULL;
-    return PyLong_FromLong(komparu_async_http_events(h));
-}
-
-static PyObject *py_async_http_perform(PyObject *self, PyObject *args) {
-    (void)self;
-    PyObject *capsule;
-    int fd, ev;
-    if (!PyArg_ParseTuple(args, "Oii", &capsule, &fd, &ev))
-        return NULL;
-    komparu_async_http_t *h = get_async_http(capsule);
-    if (!h) return NULL;
-    komparu_async_http_perform(h, fd, ev);
-    Py_RETURN_NONE;
-}
-
-static PyObject *py_async_http_timeout_perform(PyObject *self, PyObject *arg) {
-    (void)self;
-    komparu_async_http_t *h = get_async_http(arg);
-    if (!h) return NULL;
-    komparu_async_http_timeout_perform(h);
-    Py_RETURN_NONE;
-}
-
-static PyObject *py_async_http_timeout_ms(PyObject *self, PyObject *arg) {
-    (void)self;
-    komparu_async_http_t *h = get_async_http(arg);
-    if (!h) return NULL;
-    return PyLong_FromLong(komparu_async_http_timeout_ms(h));
-}
-
-static PyObject *py_async_http_read(PyObject *self, PyObject *args) {
-    (void)self;
-    PyObject *capsule;
-    Py_ssize_t size;
-    if (!PyArg_ParseTuple(args, "On", &capsule, &size))
-        return NULL;
-    komparu_async_http_t *h = get_async_http(capsule);
-    if (!h) return NULL;
-    if (size <= 0) return PyBytes_FromStringAndSize("", 0);
-
-    PyObject *result = PyBytes_FromStringAndSize(NULL, size);
-    if (!result) return NULL;
-
-    size_t n = komparu_async_http_read(h, PyBytes_AS_STRING(result), (size_t)size);
-    if (n < (size_t)size) {
-        if (_PyBytes_Resize(&result, (Py_ssize_t)n) < 0)
-            return NULL;
-    }
-    return result;
-}
-
-static PyObject *py_async_http_buffered(PyObject *self, PyObject *arg) {
-    (void)self;
-    komparu_async_http_t *h = get_async_http(arg);
-    if (!h) return NULL;
-    return PyLong_FromSize_t(komparu_async_http_buffered(h));
-}
-
-static PyObject *py_async_http_size(PyObject *self, PyObject *arg) {
-    (void)self;
-    komparu_async_http_t *h = get_async_http(arg);
-    if (!h) return NULL;
-    return PyLong_FromLongLong(komparu_async_http_size(h));
-}
-
-static PyObject *py_async_http_done(PyObject *self, PyObject *arg) {
-    (void)self;
-    komparu_async_http_t *h = get_async_http(arg);
-    if (!h) return NULL;
-    if (komparu_async_http_done(h)) Py_RETURN_TRUE;
-    Py_RETURN_FALSE;
-}
-
-static PyObject *py_async_http_error(PyObject *self, PyObject *arg) {
-    (void)self;
-    komparu_async_http_t *h = get_async_http(arg);
-    if (!h) return NULL;
-    const char *err = komparu_async_http_error(h);
-    if (err) return PyUnicode_FromString(err);
-    Py_RETURN_NONE;
-}
-
-static PyObject *py_async_http_status(PyObject *self, PyObject *arg) {
-    (void)self;
-    komparu_async_http_t *h = get_async_http(arg);
-    if (!h) return NULL;
-    return PyLong_FromLong(komparu_async_http_status(h));
-}
-
-static PyObject *py_async_http_close(PyObject *self, PyObject *arg) {
-    (void)self;
-    if (!PyCapsule_IsValid(arg, "komparu.async_http"))
-        Py_RETURN_NONE;
-    komparu_async_http_t *h = PyCapsule_GetPointer(arg, "komparu.async_http");
-    if (h) {
-        komparu_async_http_close(h);
-        PyCapsule_SetDestructor(arg, NULL);
-        PyCapsule_SetName(arg, "komparu.async_http.closed");
-    }
-    Py_RETURN_NONE;
-}
-
-/* =========================================================================
  * Module definition
  * ========================================================================= */
 
@@ -1125,20 +967,6 @@ static PyMethodDef module_methods[] = {
         "Compare two bytes-like objects via memcmp.\n"
         "Returns True if identical, False otherwise."
     },
-    /* Async HTTP — libcurl multi for asyncio */
-    {"async_http_open", (PyCFunction)py_async_http_open, METH_VARARGS, NULL},
-    {"async_http_fileno", (PyCFunction)py_async_http_fileno, METH_O, NULL},
-    {"async_http_events", (PyCFunction)py_async_http_events, METH_O, NULL},
-    {"async_http_perform", (PyCFunction)py_async_http_perform, METH_VARARGS, NULL},
-    {"async_http_timeout_perform", (PyCFunction)py_async_http_timeout_perform, METH_O, NULL},
-    {"async_http_timeout_ms", (PyCFunction)py_async_http_timeout_ms, METH_O, NULL},
-    {"async_http_read", (PyCFunction)py_async_http_read, METH_VARARGS, NULL},
-    {"async_http_buffered", (PyCFunction)py_async_http_buffered, METH_O, NULL},
-    {"async_http_size", (PyCFunction)py_async_http_size, METH_O, NULL},
-    {"async_http_done", (PyCFunction)py_async_http_done, METH_O, NULL},
-    {"async_http_error", (PyCFunction)py_async_http_error, METH_O, NULL},
-    {"async_http_status", (PyCFunction)py_async_http_status, METH_O, NULL},
-    {"async_http_close", (PyCFunction)py_async_http_close, METH_O, NULL},
     /* Async — C pool + eventfd/pipe for asyncio integration */
     {
         "async_compare_start",

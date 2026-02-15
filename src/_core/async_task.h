@@ -38,6 +38,7 @@ komparu_async_task_t *komparu_async_compare(
     bool follow_redirects,
     bool verify_ssl,
     bool allow_private,
+    const char *proxy,
     const char **err_msg
 );
 
@@ -127,6 +128,7 @@ komparu_async_task_t *komparu_async_compare_dir_urls(
     bool follow_redirects,
     bool verify_ssl,
     bool allow_private,
+    const char *proxy,
     const char **err_msg
 );
 

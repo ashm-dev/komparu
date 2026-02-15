@@ -45,26 +45,18 @@ def _resolve_headers(source: str | Source, global_headers: dict[str, str] | None
     return global_headers
 
 
-def _resolve_opt(source_val, call_val, cfg_val):
-    """Three-tier priority: Source > call param > global config."""
-    if source_val is not None:
-        return source_val
-    if call_val is not None:
-        return call_val
-    return cfg_val
-
-
 def compare(
     source_a: str | Source,
     source_b: str | Source,
     *,
-    chunk_size: int | None = None,
-    size_precheck: bool | None = None,
-    quick_check: bool | None = None,
+    chunk_size: int = 65536,
+    size_precheck: bool = True,
+    quick_check: bool = True,
     headers: dict[str, str] | None = None,
-    timeout: float | None = None,
-    follow_redirects: bool | None = None,
-    verify_ssl: bool | None = None,
+    timeout: float = 30.0,
+    follow_redirects: bool = True,
+    verify_ssl: bool = True,
+    proxy: str | None = None,
 ) -> bool:
     """Compare two sources byte-by-byte.
 
@@ -77,40 +69,28 @@ def compare(
     :param timeout: HTTP timeout in seconds.
     :param follow_redirects: Follow HTTP redirects.
     :param verify_ssl: Verify SSL certificates.
+    :param proxy: Proxy URL (e.g. http://host:port, socks5://host:port).
     :returns: True if sources are byte-identical.
     """
     cfg = get_config()
 
-    # Resolve source paths
     path_a = source_a.url if isinstance(source_a, Source) else source_a
     path_b = source_b.url if isinstance(source_b, Source) else source_b
 
-    # Merge options: Source() > call param > config
-    cs = chunk_size if chunk_size is not None else cfg.chunk_size
-    sp = size_precheck if size_precheck is not None else cfg.size_precheck
-    qc = quick_check if quick_check is not None else cfg.quick_check
-
-    # HTTP options — use the more specific headers per-source
-    # For the C layer, we pass the global headers; per-source resolution
-    # happens when we support Source objects fully in the C layer.
-    # For now: merge the "most applicable" headers for each source.
     h = headers if headers is not None else (cfg.headers or None)
-    t = timeout if timeout is not None else cfg.timeout
-    fr = follow_redirects if follow_redirects is not None else cfg.follow_redirects
-    vs = verify_ssl if verify_ssl is not None else cfg.verify_ssl
-
-    ap = cfg.allow_private_redirects
+    p = proxy if proxy is not None else cfg.proxy
 
     return _compare_c(
         path_a, path_b,
-        chunk_size=cs,
-        size_precheck=sp,
-        quick_check=qc,
+        chunk_size=chunk_size,
+        size_precheck=size_precheck,
+        quick_check=quick_check,
         headers=h if h else None,
-        timeout=t,
-        follow_redirects=fr,
-        verify_ssl=vs,
-        allow_private=ap,
+        timeout=timeout,
+        follow_redirects=follow_redirects,
+        verify_ssl=verify_ssl,
+        allow_private=cfg.allow_private_redirects,
+        proxy=p,
     )
 
 
@@ -129,11 +109,11 @@ def compare_dir(
     dir_a: str,
     dir_b: str,
     *,
-    chunk_size: int | None = None,
-    size_precheck: bool | None = None,
-    quick_check: bool | None = None,
+    chunk_size: int = 65536,
+    size_precheck: bool = True,
+    quick_check: bool = True,
     follow_symlinks: bool = True,
-    max_workers: int | None = None,
+    max_workers: int = 0,
 ) -> DirResult:
     """Compare two directories recursively.
 
@@ -146,19 +126,13 @@ def compare_dir(
     :param max_workers: Thread pool size (0=auto, 1=sequential).
     :returns: DirResult with equal, diff, only_left, only_right.
     """
-    cfg = get_config()
-    cs = chunk_size if chunk_size is not None else cfg.chunk_size
-    sp = size_precheck if size_precheck is not None else cfg.size_precheck
-    qc = quick_check if quick_check is not None else cfg.quick_check
-    mw = max_workers if max_workers is not None else cfg.max_workers
-
     raw = _compare_dir_c(
         dir_a, dir_b,
-        chunk_size=cs,
-        size_precheck=sp,
-        quick_check=qc,
+        chunk_size=chunk_size,
+        size_precheck=size_precheck,
+        quick_check=quick_check,
         follow_symlinks=follow_symlinks,
-        max_workers=mw,
+        max_workers=max_workers,
     )
     return _build_dir_result(raw)
 
@@ -167,37 +141,30 @@ def compare_archive(
     path_a: str,
     path_b: str,
     *,
-    chunk_size: int | None = None,
-    max_decompressed_size: int | None = None,
-    max_compression_ratio: int | None = None,
-    max_archive_entries: int | None = None,
-    max_entry_name_length: int | None = None,
+    chunk_size: int = 65536,
+    max_decompressed_size: int = 1073741824,
+    max_compression_ratio: int = 200,
+    max_archive_entries: int = 100_000,
+    max_entry_name_length: int = 4096,
 ) -> DirResult:
     """Compare two archive files entry-by-entry.
 
     :param path_a: Path to first archive file.
     :param path_b: Path to second archive file.
-    :param chunk_size: Chunk size (unused, archives compared in-memory).
+    :param chunk_size: Chunk size in bytes.
     :param max_decompressed_size: Max total decompressed bytes (bomb limit).
     :param max_compression_ratio: Max compression ratio (bomb limit).
     :param max_archive_entries: Max number of archive entries (bomb limit).
     :param max_entry_name_length: Max entry path length (bomb limit).
     :returns: DirResult with equal, diff, only_left, only_right.
     """
-    cfg = get_config()
-    cs = chunk_size if chunk_size is not None else cfg.chunk_size
-    mds = max_decompressed_size if max_decompressed_size is not None else (cfg.max_decompressed_size or -1)
-    mcr = max_compression_ratio if max_compression_ratio is not None else (cfg.max_compression_ratio or -1)
-    me = max_archive_entries if max_archive_entries is not None else (cfg.max_archive_entries or -1)
-    menl = max_entry_name_length if max_entry_name_length is not None else (cfg.max_entry_name_length or -1)
-
     raw = _compare_archive_c(
         path_a, path_b,
-        chunk_size=cs,
-        max_decompressed_size=mds,
-        max_compression_ratio=mcr,
-        max_entries=me,
-        max_entry_name_length=menl,
+        chunk_size=chunk_size,
+        max_decompressed_size=max_decompressed_size,
+        max_compression_ratio=max_compression_ratio,
+        max_entries=max_archive_entries,
+        max_entry_name_length=max_entry_name_length,
     )
     return _build_dir_result(raw)
 
@@ -205,14 +172,15 @@ def compare_archive(
 def compare_all(
     sources: list[str | Source],
     *,
-    chunk_size: int | None = None,
-    size_precheck: bool | None = None,
-    quick_check: bool | None = None,
+    chunk_size: int = 65536,
+    size_precheck: bool = True,
+    quick_check: bool = True,
     headers: dict[str, str] | None = None,
-    timeout: float | None = None,
-    follow_redirects: bool | None = None,
-    verify_ssl: bool | None = None,
-    max_workers: int | None = None,
+    timeout: float = 30.0,
+    follow_redirects: bool = True,
+    verify_ssl: bool = True,
+    max_workers: int = 0,
+    proxy: str | None = None,
 ) -> bool:
     """Check if all sources are byte-identical.
 
@@ -220,15 +188,13 @@ def compare_all(
 
     :param sources: List of file paths, URLs, or Source objects.
     :param max_workers: Thread pool size (0=auto, 1=sequential).
+    :param proxy: Proxy URL (e.g. http://host:port, socks5://host:port).
     :returns: True if all sources are identical.
     """
     if len(sources) < 2:
         return True
 
-    cfg = get_config()
-    mw = max_workers if max_workers is not None else cfg.max_workers
-
-    kwargs = {
+    kwargs: dict = {
         "chunk_size": chunk_size,
         "size_precheck": size_precheck,
         "quick_check": quick_check,
@@ -236,19 +202,18 @@ def compare_all(
         "timeout": timeout,
         "follow_redirects": follow_redirects,
         "verify_ssl": verify_ssl,
+        "proxy": proxy,
     }
-    # Remove None values to use defaults
-    kwargs = {k: v for k, v in kwargs.items() if v is not None}
 
     ref = sources[0]
     others = sources[1:]
 
-    if mw == 1 or len(others) == 1:
+    if max_workers == 1 or len(others) == 1:
         return all(compare(ref, s, **kwargs) for s in others)
 
     from concurrent.futures import ThreadPoolExecutor
 
-    pool_size = mw if mw > 0 else min(len(others), (cfg.max_workers or 8))
+    pool_size = max_workers if max_workers > 0 else min(len(others), 8)
     with ThreadPoolExecutor(max_workers=pool_size) as pool:
         futures = [pool.submit(compare, ref, s, **kwargs) for s in others]
         return all(f.result() for f in futures)
@@ -257,25 +222,24 @@ def compare_all(
 def compare_many(
     sources: list[str | Source],
     *,
-    chunk_size: int | None = None,
-    size_precheck: bool | None = None,
-    quick_check: bool | None = None,
+    chunk_size: int = 65536,
+    size_precheck: bool = True,
+    quick_check: bool = True,
     headers: dict[str, str] | None = None,
-    timeout: float | None = None,
-    follow_redirects: bool | None = None,
-    verify_ssl: bool | None = None,
-    max_workers: int | None = None,
+    timeout: float = 30.0,
+    follow_redirects: bool = True,
+    verify_ssl: bool = True,
+    max_workers: int = 0,
+    proxy: str | None = None,
 ) -> CompareResult:
     """Detailed pairwise comparison of multiple sources.
 
     :param sources: List of file paths, URLs, or Source objects.
     :param max_workers: Thread pool size (0=auto, 1=sequential).
+    :param proxy: Proxy URL (e.g. http://host:port, socks5://host:port).
     :returns: CompareResult with all_equal, groups, diff.
     """
-    cfg = get_config()
-    mw = max_workers if max_workers is not None else cfg.max_workers
-
-    kwargs = {
+    kwargs: dict = {
         "chunk_size": chunk_size,
         "size_precheck": size_precheck,
         "quick_check": quick_check,
@@ -283,8 +247,8 @@ def compare_many(
         "timeout": timeout,
         "follow_redirects": follow_redirects,
         "verify_ssl": verify_ssl,
+        "proxy": proxy,
     }
-    kwargs = {k: v for k, v in kwargs.items() if v is not None}
 
     n = len(sources)
     if n < 2:
@@ -301,12 +265,12 @@ def compare_many(
         i, j = pair
         return i, j, compare(sources[i], sources[j], **kwargs)
 
-    if mw == 1 or len(pairs) == 1:
+    if max_workers == 1 or len(pairs) == 1:
         results = [_cmp_pair(p) for p in pairs]
     else:
         from concurrent.futures import ThreadPoolExecutor
 
-        pool_size = mw if mw > 0 else min(len(pairs), (cfg.max_workers or 8))
+        pool_size = max_workers if max_workers > 0 else min(len(pairs), 8)
         with ThreadPoolExecutor(max_workers=pool_size) as pool:
             results = list(pool.map(_cmp_pair, pairs))
 
@@ -354,28 +318,27 @@ def compare_dir_urls(
     dir_path: str,
     url_map: dict[str, str],
     *,
-    chunk_size: int | None = None,
-    size_precheck: bool | None = None,
-    quick_check: bool | None = None,
+    chunk_size: int = 65536,
+    size_precheck: bool = True,
+    quick_check: bool = True,
     headers: dict[str, str] | None = None,
-    timeout: float | None = None,
-    follow_redirects: bool | None = None,
-    verify_ssl: bool | None = None,
-    max_workers: int | None = None,
+    timeout: float = 30.0,
+    follow_redirects: bool = True,
+    verify_ssl: bool = True,
+    max_workers: int = 0,
+    proxy: str | None = None,
 ) -> DirResult:
     """Compare directory files against URL mapping.
 
     :param dir_path: Path to local directory.
     :param url_map: Mapping of relative_path -> URL.
     :param max_workers: Thread pool size (0=auto, 1=sequential).
+    :param proxy: Proxy URL (e.g. http://host:port, socks5://host:port).
     :returns: DirResult with equal, diff, only_left, only_right.
     """
     import os
 
-    cfg = get_config()
-    mw = max_workers if max_workers is not None else cfg.max_workers
-
-    kwargs = {
+    kwargs: dict = {
         "chunk_size": chunk_size,
         "size_precheck": size_precheck,
         "quick_check": quick_check,
@@ -383,8 +346,8 @@ def compare_dir_urls(
         "timeout": timeout,
         "follow_redirects": follow_redirects,
         "verify_ssl": verify_ssl,
+        "proxy": proxy,
     }
-    kwargs = {k: v for k, v in kwargs.items() if v is not None}
 
     # Walk local directory for relative paths
     local_files: set[str] = set()
@@ -405,12 +368,12 @@ def compare_dir_urls(
             local_path = os.path.join(dir_path, rel)
             return rel, compare(local_path, url_map[rel], **kwargs)
 
-        if mw == 1 or len(common) == 1:
+        if max_workers == 1 or len(common) == 1:
             results = [_cmp_entry(r) for r in sorted(common)]
         else:
             from concurrent.futures import ThreadPoolExecutor
 
-            pool_size = mw if mw > 0 else min(len(common), (cfg.max_workers or 8))
+            pool_size = max_workers if max_workers > 0 else min(len(common), 8)
             with ThreadPoolExecutor(max_workers=pool_size) as pool:
                 results = list(pool.map(_cmp_entry, sorted(common)))
 

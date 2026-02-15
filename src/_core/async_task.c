@@ -71,6 +71,7 @@ struct komparu_async_task {
     bool follow_redirects;
     bool verify_ssl;
     bool allow_private;
+    char *proxy;             /* Owned copy, or NULL */
 
     /* Dir-specific */
     bool follow_symlinks;
@@ -98,8 +99,84 @@ struct komparu_async_task {
 };
 
 /* =========================================================================
- * Notification fd — eventfd (Linux) or pipe (portable)
+ * Notification fd — eventfd (Linux), pipe (macOS), TCP socketpair (Windows)
  * ========================================================================= */
+
+#ifdef KOMPARU_WINDOWS
+
+/*
+ * Windows has no pipe/eventfd usable with select(). Create a TCP
+ * loopback socketpair: write 1 byte to signal, read side is registered
+ * with asyncio SelectorEventLoop.add_reader(). SOCKET values are cast
+ * to int, matching CPython socket.fileno() convention.
+ */
+static int notify_create(int *read_fd, int *write_fd) {
+    SOCKET listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (listener == INVALID_SOCKET) return -1;
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = 0;
+
+    if (bind(listener, (struct sockaddr *)&addr, sizeof(addr)) == SOCKET_ERROR) {
+        closesocket(listener);
+        return -1;
+    }
+
+    int addrlen = sizeof(addr);
+    if (getsockname(listener, (struct sockaddr *)&addr, &addrlen) == SOCKET_ERROR) {
+        closesocket(listener);
+        return -1;
+    }
+
+    if (listen(listener, 1) == SOCKET_ERROR) {
+        closesocket(listener);
+        return -1;
+    }
+
+    SOCKET writer = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (writer == INVALID_SOCKET) {
+        closesocket(listener);
+        return -1;
+    }
+
+    if (connect(writer, (struct sockaddr *)&addr, sizeof(addr)) == SOCKET_ERROR) {
+        closesocket(writer);
+        closesocket(listener);
+        return -1;
+    }
+
+    SOCKET reader = accept(listener, NULL, NULL);
+    closesocket(listener);
+    if (reader == INVALID_SOCKET) {
+        closesocket(writer);
+        return -1;
+    }
+
+    /* Non-blocking */
+    unsigned long one = 1;
+    ioctlsocket(reader, FIONBIO, &one);
+    ioctlsocket(writer, FIONBIO, &one);
+
+    *read_fd = (int)reader;
+    *write_fd = (int)writer;
+    return 0;
+}
+
+static void notify_signal(int write_fd) {
+    char c = 1;
+    send((SOCKET)(intptr_t)write_fd, &c, 1, 0);
+}
+
+static void notify_close(int read_fd, int write_fd) {
+    if (read_fd >= 0) closesocket((SOCKET)(intptr_t)read_fd);
+    if (write_fd >= 0 && write_fd != read_fd)
+        closesocket((SOCKET)(intptr_t)write_fd);
+}
+
+#else /* POSIX */
 
 static int notify_create(int *read_fd, int *write_fd) {
 #ifdef KOMPARU_LINUX
@@ -136,23 +213,34 @@ static void notify_close(int read_fd, int write_fd) {
     if (write_fd >= 0 && write_fd != read_fd) close(write_fd);
 }
 
+#endif /* KOMPARU_WINDOWS */
+
 /* =========================================================================
  * Global async pool — lazily initialized
  * ========================================================================= */
 
 static _Atomic(komparu_pool_t *) g_async_pool = NULL;
+
+#ifdef KOMPARU_WINDOWS
+static SRWLOCK g_pool_lock = SRWLOCK_INIT;
+#define G_POOL_LOCK()   AcquireSRWLockExclusive(&g_pool_lock)
+#define G_POOL_UNLOCK() ReleaseSRWLockExclusive(&g_pool_lock)
+#else
 static pthread_mutex_t g_pool_mutex = PTHREAD_MUTEX_INITIALIZER;
+#define G_POOL_LOCK()   pthread_mutex_lock(&g_pool_mutex)
+#define G_POOL_UNLOCK() pthread_mutex_unlock(&g_pool_mutex)
+#endif
 
 static komparu_pool_t *get_pool(void) {
     komparu_pool_t *pool = atomic_load_explicit(&g_async_pool, memory_order_acquire);
     if (pool) return pool;
-    pthread_mutex_lock(&g_pool_mutex);
+    G_POOL_LOCK();
     pool = atomic_load_explicit(&g_async_pool, memory_order_relaxed);
     if (!pool) {
         pool = komparu_pool_create(0);  /* auto-detect workers */
         atomic_store_explicit(&g_async_pool, pool, memory_order_release);
     }
-    pthread_mutex_unlock(&g_pool_mutex);
+    G_POOL_UNLOCK();
     return pool;
 }
 
@@ -199,7 +287,8 @@ static void compare_worker(void *arg) {
             task->source_a,
             (const char **)task->headers,
             task->timeout, task->follow_redirects,
-            task->verify_ssl, task->allow_private, &err);
+            task->verify_ssl, task->allow_private,
+            task->proxy, &err);
     } else {
         ra = komparu_reader_file_open(task->source_a, &err);
     }
@@ -219,7 +308,8 @@ static void compare_worker(void *arg) {
             task->source_b,
             (const char **)task->headers,
             task->timeout, task->follow_redirects,
-            task->verify_ssl, task->allow_private, &err);
+            task->verify_ssl, task->allow_private,
+            task->proxy, &err);
     } else {
         rb = komparu_reader_file_open(task->source_b, &err);
     }
@@ -404,7 +494,7 @@ static void compare_dir_urls_worker(void *arg) {
                 (const char **)task->headers,
                 task->timeout, task->follow_redirects,
                 task->verify_ssl, task->allow_private,
-                &open_err);
+                task->proxy, &open_err);
             if (!rb) {
                 ra->close(ra);
                 komparu_dir_result_add_diff(result, local_paths.paths[li],
@@ -533,6 +623,7 @@ komparu_async_task_t *komparu_async_compare(
     bool follow_redirects,
     bool verify_ssl,
     bool allow_private,
+    const char *proxy,
     const char **err_msg
 ) {
     komparu_pool_t *pool = get_pool();
@@ -578,6 +669,7 @@ komparu_async_task_t *komparu_async_compare(
     task->follow_redirects = follow_redirects;
     task->verify_ssl = verify_ssl;
     task->allow_private = allow_private;
+    task->proxy = proxy ? strdup(proxy) : NULL;
 
     if (komparu_pool_submit(pool, compare_worker, task) != 0) {
         *err_msg = "async pool queue full";
@@ -674,6 +766,7 @@ komparu_async_task_t *komparu_async_compare_dir_urls(
     bool follow_redirects,
     bool verify_ssl,
     bool allow_private,
+    const char *proxy,
     const char **err_msg
 ) {
     komparu_pool_t *pool = get_pool();
@@ -744,6 +837,7 @@ komparu_async_task_t *komparu_async_compare_dir_urls(
     task->follow_redirects = follow_redirects;
     task->verify_ssl = verify_ssl;
     task->allow_private = allow_private;
+    task->proxy = proxy ? strdup(proxy) : NULL;
 
     if (komparu_pool_submit(pool, compare_dir_urls_worker, task) != 0) {
         *err_msg = "async pool queue full";
@@ -794,6 +888,7 @@ static void task_free_internals(komparu_async_task_t *task) {
     notify_close(task->read_fd, task->write_fd);
     free(task->source_a);
     free(task->source_b);
+    free(task->proxy);
     if (task->headers) {
         for (size_t i = 0; i < task->header_count; i++)
             free(task->headers[i]);
@@ -836,12 +931,12 @@ void komparu_async_task_free(komparu_async_task_t *task) {
 }
 
 void komparu_async_cleanup(void) {
-    pthread_mutex_lock(&g_pool_mutex);
+    G_POOL_LOCK();
     komparu_pool_t *pool = atomic_load_explicit(&g_async_pool, memory_order_relaxed);
     if (pool) {
         komparu_pool_wait(pool);
         komparu_pool_destroy(pool);
         atomic_store_explicit(&g_async_pool, NULL, memory_order_release);
     }
-    pthread_mutex_unlock(&g_pool_mutex);
+    G_POOL_UNLOCK();
 }

@@ -35,6 +35,7 @@ komparu_reader_t *komparu_reader_http_open_ex(
     bool follow_redirects,
     bool verify_ssl,
     bool allow_private,
+    const char *proxy,
     const char **err_msg
 );
 

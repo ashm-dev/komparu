@@ -38,6 +38,7 @@ komparu_async_http_t *komparu_async_http_open(
     bool follow_redirects,
     bool verify_ssl,
     bool allow_private,
+    const char *proxy,
     const char **err_msg
 );
 

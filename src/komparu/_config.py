@@ -34,6 +34,9 @@ class KomparuConfig:
     # General limits
     comparison_timeout: float | None = 300.0               # 5 min
 
+    # Proxy
+    proxy: str | None = None  # None = direct connection
+
     # SSRF protection
     allow_private_redirects: bool = False
 
@@ -58,6 +61,7 @@ def configure(**kwargs) -> None:
     :param max_archive_entries: Max files per archive (None = no limit).
     :param max_entry_name_length: Max path length per entry (None = no limit).
     :param comparison_timeout: Wall-clock timeout per comparison (None = no limit).
+    :param proxy: Proxy URL (e.g. http://host:port, socks5://host:port).
     :param allow_private_redirects: Allow redirects to private networks.
     """
     global _config

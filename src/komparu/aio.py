@@ -80,13 +80,14 @@ async def compare(
     source_a: str | Source,
     source_b: str | Source,
     *,
-    chunk_size: int | None = None,
-    size_precheck: bool | None = None,
-    quick_check: bool | None = None,
+    chunk_size: int = 65536,
+    size_precheck: bool = True,
+    quick_check: bool = True,
     headers: dict[str, str] | None = None,
-    timeout: float | None = None,
-    follow_redirects: bool | None = None,
-    verify_ssl: bool | None = None,
+    timeout: float = 30.0,
+    follow_redirects: bool = True,
+    verify_ssl: bool = True,
+    proxy: str | None = None,
 ) -> bool:
     """Compare two sources byte-by-byte (async).
 
@@ -94,6 +95,7 @@ async def compare(
 
     :param source_a: File path, URL, or Source object.
     :param source_b: File path, URL, or Source object.
+    :param proxy: Proxy URL (e.g. http://host:port, socks5://host:port).
     :returns: True if sources are byte-identical.
     """
     cfg = get_config()
@@ -101,25 +103,20 @@ async def compare(
     path_a = _source_path(source_a)
     path_b = _source_path(source_b)
 
-    cs = chunk_size if chunk_size is not None else cfg.chunk_size
-    sp = size_precheck if size_precheck is not None else cfg.size_precheck
-    qc = quick_check if quick_check is not None else cfg.quick_check
     h = headers if headers is not None else (cfg.headers or None)
-    t = timeout if timeout is not None else cfg.timeout
-    fr = follow_redirects if follow_redirects is not None else cfg.follow_redirects
-    vs = verify_ssl if verify_ssl is not None else cfg.verify_ssl
-    ap = cfg.allow_private_redirects
+    p = proxy if proxy is not None else cfg.proxy
 
     fd, task = async_compare_start(
         path_a, path_b,
-        chunk_size=cs,
-        size_precheck=sp,
-        quick_check=qc,
+        chunk_size=chunk_size,
+        size_precheck=size_precheck,
+        quick_check=quick_check,
         headers=h if h else None,
-        timeout=t,
-        follow_redirects=fr,
-        verify_ssl=vs,
-        allow_private=ap,
+        timeout=timeout,
+        follow_redirects=follow_redirects,
+        verify_ssl=verify_ssl,
+        allow_private=cfg.allow_private_redirects,
+        proxy=p,
     )
 
     return await _await_task(fd, lambda: async_compare_result(task))
@@ -129,11 +126,11 @@ async def compare_dir(
     dir_a: str,
     dir_b: str,
     *,
-    chunk_size: int | None = None,
-    size_precheck: bool | None = None,
-    quick_check: bool | None = None,
+    chunk_size: int = 65536,
+    size_precheck: bool = True,
+    quick_check: bool = True,
     follow_symlinks: bool = True,
-    max_workers: int | None = None,
+    max_workers: int = 0,
 ) -> DirResult:
     """Compare two directories recursively (async).
 
@@ -143,19 +140,13 @@ async def compare_dir(
     :param dir_b: Path to second directory.
     :returns: DirResult with equal, diff, only_left, only_right.
     """
-    cfg = get_config()
-    cs = chunk_size if chunk_size is not None else cfg.chunk_size
-    sp = size_precheck if size_precheck is not None else cfg.size_precheck
-    qc = quick_check if quick_check is not None else cfg.quick_check
-    mw = max_workers if max_workers is not None else cfg.max_workers
-
     fd, task = async_compare_dir_start(
         dir_a, dir_b,
-        chunk_size=cs,
-        size_precheck=sp,
-        quick_check=qc,
+        chunk_size=chunk_size,
+        size_precheck=size_precheck,
+        quick_check=quick_check,
         follow_symlinks=follow_symlinks,
-        max_workers=mw,
+        max_workers=max_workers,
     )
 
     raw = await _await_task(fd, lambda: async_compare_dir_result(task))
@@ -166,31 +157,24 @@ async def compare_archive(
     path_a: str,
     path_b: str,
     *,
-    chunk_size: int | None = None,
-    max_decompressed_size: int | None = None,
-    max_compression_ratio: int | None = None,
-    max_archive_entries: int | None = None,
-    max_entry_name_length: int | None = None,
+    chunk_size: int = 65536,
+    max_decompressed_size: int = 1073741824,
+    max_compression_ratio: int = 200,
+    max_archive_entries: int = 100_000,
+    max_entry_name_length: int = 4096,
 ) -> DirResult:
     """Compare two archive files entry-by-entry (async).
 
     Archive I/O runs in a C thread via libarchive. Completion
     notification via eventfd integrated with asyncio.
     """
-    cfg = get_config()
-    cs = chunk_size if chunk_size is not None else cfg.chunk_size
-    mds = max_decompressed_size if max_decompressed_size is not None else (cfg.max_decompressed_size or -1)
-    mcr = max_compression_ratio if max_compression_ratio is not None else (cfg.max_compression_ratio or -1)
-    me = max_archive_entries if max_archive_entries is not None else (cfg.max_archive_entries or -1)
-    menl = max_entry_name_length if max_entry_name_length is not None else (cfg.max_entry_name_length or -1)
-
     fd, task = async_compare_archive_start(
         path_a, path_b,
-        chunk_size=cs,
-        max_decompressed_size=mds,
-        max_compression_ratio=mcr,
-        max_entries=me,
-        max_entry_name_length=menl,
+        chunk_size=chunk_size,
+        max_decompressed_size=max_decompressed_size,
+        max_compression_ratio=max_compression_ratio,
+        max_entries=max_archive_entries,
+        max_entry_name_length=max_entry_name_length,
     )
 
     raw = await _await_task(fd, lambda: async_compare_archive_result(task))
@@ -200,13 +184,14 @@ async def compare_archive(
 async def compare_all(
     sources: list[str | Source],
     *,
-    chunk_size: int | None = None,
-    size_precheck: bool | None = None,
-    quick_check: bool | None = None,
+    chunk_size: int = 65536,
+    size_precheck: bool = True,
+    quick_check: bool = True,
     headers: dict[str, str] | None = None,
-    timeout: float | None = None,
-    follow_redirects: bool | None = None,
-    verify_ssl: bool | None = None,
+    timeout: float = 30.0,
+    follow_redirects: bool = True,
+    verify_ssl: bool = True,
+    proxy: str | None = None,
 ) -> bool:
     """Check if all sources are identical (async).
 
@@ -215,21 +200,16 @@ async def compare_all(
     if len(sources) < 2:
         return True
 
-    kwargs: dict[str, Any] = {}
-    if chunk_size is not None:
-        kwargs["chunk_size"] = chunk_size
-    if size_precheck is not None:
-        kwargs["size_precheck"] = size_precheck
-    if quick_check is not None:
-        kwargs["quick_check"] = quick_check
-    if headers is not None:
-        kwargs["headers"] = headers
-    if timeout is not None:
-        kwargs["timeout"] = timeout
-    if follow_redirects is not None:
-        kwargs["follow_redirects"] = follow_redirects
-    if verify_ssl is not None:
-        kwargs["verify_ssl"] = verify_ssl
+    kwargs: dict[str, Any] = {
+        "chunk_size": chunk_size,
+        "size_precheck": size_precheck,
+        "quick_check": quick_check,
+        "headers": headers,
+        "timeout": timeout,
+        "follow_redirects": follow_redirects,
+        "verify_ssl": verify_ssl,
+        "proxy": proxy,
+    }
 
     ref = sources[0]
     coros = [compare(ref, s, **kwargs) for s in sources[1:]]
@@ -240,33 +220,29 @@ async def compare_all(
 async def compare_many(
     sources: list[str | Source],
     *,
-    chunk_size: int | None = None,
-    size_precheck: bool | None = None,
-    quick_check: bool | None = None,
+    chunk_size: int = 65536,
+    size_precheck: bool = True,
+    quick_check: bool = True,
     headers: dict[str, str] | None = None,
-    timeout: float | None = None,
-    follow_redirects: bool | None = None,
-    verify_ssl: bool | None = None,
+    timeout: float = 30.0,
+    follow_redirects: bool = True,
+    verify_ssl: bool = True,
+    proxy: str | None = None,
 ) -> CompareResult:
     """Detailed pairwise comparison of multiple sources (async).
 
     All pairs compared concurrently via asyncio.gather().
     """
-    kwargs: dict[str, Any] = {}
-    if chunk_size is not None:
-        kwargs["chunk_size"] = chunk_size
-    if size_precheck is not None:
-        kwargs["size_precheck"] = size_precheck
-    if quick_check is not None:
-        kwargs["quick_check"] = quick_check
-    if headers is not None:
-        kwargs["headers"] = headers
-    if timeout is not None:
-        kwargs["timeout"] = timeout
-    if follow_redirects is not None:
-        kwargs["follow_redirects"] = follow_redirects
-    if verify_ssl is not None:
-        kwargs["verify_ssl"] = verify_ssl
+    kwargs: dict[str, Any] = {
+        "chunk_size": chunk_size,
+        "size_precheck": size_precheck,
+        "quick_check": quick_check,
+        "headers": headers,
+        "timeout": timeout,
+        "follow_redirects": follow_redirects,
+        "verify_ssl": verify_ssl,
+        "proxy": proxy,
+    }
 
     n = len(sources)
     names = [_source_path(s) for s in sources]
@@ -314,13 +290,14 @@ async def compare_dir_urls(
     dir_path: str,
     url_map: dict[str, str],
     *,
-    chunk_size: int | None = None,
-    size_precheck: bool | None = None,
-    quick_check: bool | None = None,
+    chunk_size: int = 65536,
+    size_precheck: bool = True,
+    quick_check: bool = True,
     headers: dict[str, str] | None = None,
-    timeout: float | None = None,
-    follow_redirects: bool | None = None,
-    verify_ssl: bool | None = None,
+    timeout: float = 30.0,
+    follow_redirects: bool = True,
+    verify_ssl: bool = True,
+    proxy: str | None = None,
 ) -> DirResult:
     """Compare directory files against URL mapping (async).
 
@@ -328,25 +305,21 @@ async def compare_dir_urls(
     Completion notification via eventfd integrated with asyncio.
     """
     cfg = get_config()
-    cs = chunk_size if chunk_size is not None else cfg.chunk_size
-    sp = size_precheck if size_precheck is not None else cfg.size_precheck
-    qc = quick_check if quick_check is not None else cfg.quick_check
+
     h = headers if headers is not None else (cfg.headers or None)
-    t = timeout if timeout is not None else cfg.timeout
-    fr = follow_redirects if follow_redirects is not None else cfg.follow_redirects
-    vs = verify_ssl if verify_ssl is not None else cfg.verify_ssl
-    ap = cfg.allow_private_redirects
+    p = proxy if proxy is not None else cfg.proxy
 
     fd, task = async_compare_dir_urls_start(
         dir_path, url_map,
-        chunk_size=cs,
-        size_precheck=sp,
-        quick_check=qc,
+        chunk_size=chunk_size,
+        size_precheck=size_precheck,
+        quick_check=quick_check,
         headers=h if h else None,
-        timeout=t,
-        follow_redirects=fr,
-        verify_ssl=vs,
-        allow_private=ap,
+        timeout=timeout,
+        follow_redirects=follow_redirects,
+        verify_ssl=verify_ssl,
+        allow_private=cfg.allow_private_redirects,
+        proxy=p,
     )
 
     raw = await _await_task(fd, lambda: async_compare_dir_urls_result(task))

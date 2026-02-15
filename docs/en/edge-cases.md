@@ -47,7 +47,7 @@ Three-pass analysis. Every case has a status:
 | 25a | **SSRF via redirect** | HANDLE | Attacker redirects to `http://localhost/admin`. Must validate redirect targets: block `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `::1`, `localhost`. Use libcurl `CURLOPT_REDIR_PROTOCOLS` to restrict to HTTP/HTTPS only. Configurable whitelist/blacklist. |
 | 26 | HTTP 403 Forbidden | HANDLE | `SourceReadError("HTTP 403 for 'url'")`. |
 | 27 | HTTP 404 Not Found | HANDLE | `SourceNotFoundError("HTTP 404 for 'url'")`. |
-| 28 | HTTP 429 Too Many Requests | HANDLE | `SourceReadError` with status code. **No auto-retry** — user's server may have strict rate limits, retries would make it worse. User opts-in to retries explicitly. |
+| 28 | HTTP 429 Too Many Requests | HANDLE | `SourceReadError` with status code. **No auto-retry** — user's server may have strict rate limits, retries would make it worse. |
 | 29 | HTTP 5xx server errors | HANDLE | `SourceReadError` with status code. No auto-retry. |
 | 30 | Connection timeout | HANDLE | `SourceReadError`. No auto-retry. |
 | 31 | Connection reset mid-transfer | HANDLE | `SourceReadError`. No auto-retry. |
@@ -82,7 +82,7 @@ Three-pass analysis. Every case has a status:
 | 59 | ETag changes between Range requests (content changed on server) | PLANNED | Store ETag from first request. Verify on subsequent requests. Mismatch → `SourceReadError("source content changed during comparison")`. |
 | 60a | Server only serves whole files (no Range, no HEAD) | HANDLE | Detect on first request (200 instead of 206). Switch to full sequential download + compare. `quick_check` auto-disabled. Documented: works but slow for large files. |
 | 60b | Server rate-limits Range requests | DOCUMENT | Multiple Range requests per file may trigger rate limits. With `quick_check`, up to 4 requests before full comparison. User can disable: `quick_check=False` → single sequential request. |
-| 60c | Retry makes rate limit worse | DOCUMENT | `retries=0` (default). Retries are opt-in. User enables only if they know server tolerates retries. |
+| 60c | Retry makes rate limit worse | DOCUMENT | No auto-retry by design. komparu never retries failed requests — the user handles retries at their level if needed. |
 
 ## III. Local File System
 

@@ -46,6 +46,7 @@ class Source:
     timeout: float | None = None
     follow_redirects: bool | None = None
     verify_ssl: bool | None = None
+    proxy: str | None = None
 ```
 
 Fields set to `None` fall back to global options. Local paths can also be wrapped in `Source()` but HTTP options are ignored for them.
@@ -100,8 +101,9 @@ komparu.compare("file_a", "file_b", chunk_size=131072)  # 128 KB
 | `follow_redirects` | `bool` | `True` | Follow HTTP redirects |
 | `verify_ssl` | `bool` | `True` | Verify SSL certificates |
 | `quick_check` | `bool` | `True` | Sample first/last/middle chunks before full comparison (seekable sources only) |
+| `proxy` | `str` | `None` | Proxy URL (e.g. `http://host:port`, `socks5://host:port`) |
 
-**Priority:** `Source()` fields > function parameters > `komparu.configure()` defaults.
+**Priority:** Function parameters are the defaults. `Source().headers` override the `headers` parameter. `configure()` sets fallback `headers` and SSRF protection (`allow_private_redirects`).
 
 ### komparu.compare_dir(dir_a, dir_b, **options) -> DirResult
 
@@ -175,6 +177,7 @@ all_same = komparu.compare_all([
 | `follow_redirects` | `bool` | `True` | Follow HTTP redirects |
 | `verify_ssl` | `bool` | `True` | Verify SSL certificates |
 | `max_workers` | `int` | `0` (auto) | Thread pool size (0=auto, 1=sequential). Sync only. |
+| `proxy` | `str` | `None` | Proxy URL (e.g. `http://host:port`, `socks5://host:port`) |
 
 ### komparu.compare_many(sources, **options) -> CompareResult
 
@@ -201,6 +204,7 @@ result.diff               # dict[tuple[str, str], bool] — pairwise results
 | `follow_redirects` | `bool` | `True` | Follow HTTP redirects |
 | `verify_ssl` | `bool` | `True` | Verify SSL certificates |
 | `max_workers` | `int` | `0` (auto) | Thread pool size (0=auto, 1=sequential). Sync only. |
+| `proxy` | `str` | `None` | Proxy URL (e.g. `http://host:port`, `socks5://host:port`) |
 
 ### komparu.compare_dir_urls(directory, url_map, **options) -> DirResult
 
@@ -231,6 +235,7 @@ result = komparu.compare_dir_urls(
 | `follow_redirects` | `bool` | `True` | Follow HTTP redirects |
 | `verify_ssl` | `bool` | `True` | Verify SSL certificates |
 | `max_workers` | `int` | `0` (auto) | Thread pool size (0=auto, 1=sequential). Sync only. |
+| `proxy` | `str` | `None` | Proxy URL (e.g. `http://host:port`, `socks5://host:port`) |
 
 ## Async API
 
@@ -310,12 +315,15 @@ komparu.configure(
     # General limits
     comparison_timeout=300.0,              # 5 min wall-clock per call
 
+    # Proxy
+    proxy=None,                            # None = direct connection
+
     # SSRF protection
     allow_private_redirects=False,         # block redirects to private networks
 )
 ```
 
-All parameters can also be overridden per-call. Set to `None` to disable a limit.
+All function parameters have explicit defaults. `configure()` sets fallback `headers` and `allow_private_redirects` (SSRF protection). Archive safety limits can be adjusted per-call.
 
 ## Errors
 

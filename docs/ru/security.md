@@ -103,7 +103,7 @@ result = komparu.compare_archive(
 | `max_compression_ratio` | На архив, проверяется после каждой записи | `ArchiveBombError("compression ratio 350:1 exceeds limit 200:1")` |
 | `max_archive_entries` | На архив | `ArchiveBombError("entry count 150000 exceeds limit 100000")` |
 | `max_entry_name_length` | На запись | `ArchiveBombError("entry name 8500 bytes exceeds limit 4096")` |
-| `comparison_timeout` | На вызов (wall-clock) | `TimeoutError("comparison exceeded 300s timeout")` |
+| `comparison_timeout` | На вызов (wall-clock) | `ComparisonTimeoutError("comparison exceeded 300s timeout")` |
 
 Все ошибки лимитов — подклассы `ArchiveBombError(ArchiveError)` (кроме timeout).
 Сравнение останавливается немедленно. Частичных результатов нет.
@@ -172,7 +172,7 @@ komparu.configure(allow_private_redirects=True)
 class KomparuError(Exception): ...
 class ArchiveError(KomparuError): ...           # Общие ошибки архивов
 class ArchiveBombError(ArchiveError): ...       # Бомбы/превышение лимитов
-class TimeoutError(KomparuError): ...           # Таймаут сравнения
+class ComparisonTimeoutError(KomparuError): ... # Таймаут сравнения
 ```
 
 ## Рекомендации по сценариям

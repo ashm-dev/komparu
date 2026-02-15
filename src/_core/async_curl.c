@@ -212,6 +212,7 @@ komparu_async_http_t *komparu_async_http_open(
     bool follow_redirects,
     bool verify_ssl,
     bool allow_private,
+    const char *proxy,
     const char **err_msg
 ) {
     komparu_async_http_t *h = calloc(1, sizeof(*h));
@@ -277,6 +278,11 @@ komparu_async_http_t *komparu_async_http_open(
             h->hdrs = tmp;
         }
         curl_easy_setopt(h->easy, CURLOPT_HTTPHEADER, h->hdrs);
+    }
+
+    /* Proxy */
+    if (proxy) {
+        curl_easy_setopt(h->easy, CURLOPT_PROXY, proxy);
     }
 
     /* SSRF protection */

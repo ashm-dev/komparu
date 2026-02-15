@@ -62,7 +62,6 @@ set(KOMPARU_CORE_SOURCES
     src/_core/dirwalk.c
     src/_core/pool.c
     src/_core/async_task.c
-    src/_core/async_curl.c
 )
 
 python_add_library(_core MODULE ${KOMPARU_CORE_SOURCES})
@@ -77,6 +76,10 @@ target_link_libraries(_core PRIVATE
     LibArchive::LibArchive
     Threads::Threads
 )
+
+if(WIN32)
+    target_link_libraries(_core PRIVATE ws2_32)
+endif()
 
 # =============================================================================
 # 4. Compiler Warnings

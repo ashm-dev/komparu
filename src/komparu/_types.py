@@ -25,6 +25,7 @@ class Source:
     :param timeout: HTTP timeout in seconds.
     :param follow_redirects: Follow HTTP redirects.
     :param verify_ssl: Verify SSL certificates.
+    :param proxy: Proxy URL (e.g. http://host:port, socks5://host:port).
     """
 
     url: str
@@ -32,6 +33,7 @@ class Source:
     timeout: float | None = None
     follow_redirects: bool | None = None
     verify_ssl: bool | None = None
+    proxy: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

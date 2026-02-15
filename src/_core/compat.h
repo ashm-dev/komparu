@@ -71,6 +71,8 @@
 
 #ifdef KOMPARU_WINDOWS
     #define WIN32_LEAN_AND_MEAN
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
     #include <windows.h>
 #else
     #include <unistd.h>
@@ -81,6 +83,21 @@
     #include <setjmp.h>
     #include <pthread.h>
 #endif
+
+/* =========================================================================
+ * CPU count
+ * ========================================================================= */
+
+static inline size_t komparu_cpu_count(void) {
+#ifdef KOMPARU_WINDOWS
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    return (size_t)si.dwNumberOfProcessors;
+#else
+    long n = sysconf(_SC_NPROCESSORS_ONLN);
+    return n > 0 ? (size_t)n : 1;
+#endif
+}
 
 /* =========================================================================
  * Compiler attributes
