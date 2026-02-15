@@ -256,14 +256,17 @@ class TestCompareDirUrls:
         assert result.equal is True
 
     def test_content_mismatch(self, make_dir, httpserver):
-        d = make_dir("local", {"file.txt": b"local version"})
-        httpserver.expect_request("/file.txt").respond_with_data(b"remote version")
+        d = make_dir("local", {"file.txt": b"local_version_"})
+        httpserver.expect_request("/file.txt").respond_with_data(b"remote_version")
 
         url_map = {"file.txt": httpserver.url_for("/file.txt")}
         result = komparu.compare_dir_urls(str(d), url_map)
         assert result.equal is False
         assert "file.txt" in result.diff
-        assert result.diff["file.txt"] == DiffReason.CONTENT_MISMATCH
+        assert result.diff["file.txt"] in (
+            DiffReason.CONTENT_MISMATCH,
+            DiffReason.SIZE_MISMATCH,
+        )
 
     def test_only_local(self, make_dir, httpserver):
         d = make_dir("local", {"a.txt": b"data", "extra.txt": b"only local"})

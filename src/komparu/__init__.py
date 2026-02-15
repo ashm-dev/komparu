@@ -32,6 +32,7 @@ from komparu._config import configure, get_config, reset_config
 from komparu._core import compare as _compare_c
 from komparu._core import compare_dir as _compare_dir_c
 from komparu._core import compare_archive as _compare_archive_c
+from komparu._core import compare_dir_urls as _compare_dir_urls_c
 
 
 def _resolve_headers(source: str | Source, global_headers: dict[str, str] | None) -> dict[str, str] | None:
@@ -345,69 +346,37 @@ def compare_dir_urls(
     timeout: float = 30.0,
     follow_redirects: bool = True,
     verify_ssl: bool = True,
-    max_workers: int = 0,
+    max_workers: int = 0,  # ignored — kept for backward compatibility
     proxy: str | None = None,
 ) -> DirResult:
     """Compare directory files against URL mapping.
 
+    All I/O runs in C: dirwalk via openat/fstatat, HTTP via libcurl,
+    file comparison via mmap. GIL is released for the entire operation.
+
     :param dir_path: Path to local directory.
     :param url_map: Mapping of relative_path -> URL.
-    :param max_workers: Thread pool size (0=auto, 1=sequential).
     :param proxy: Proxy URL (e.g. http://host:port, socks5://host:port).
     :returns: DirResult with equal, diff, only_left, only_right.
     """
-    import os
+    cfg = get_config()
 
-    kwargs: dict = {
-        "chunk_size": chunk_size,
-        "size_precheck": size_precheck,
-        "quick_check": quick_check,
-        "headers": headers,
-        "timeout": timeout,
-        "follow_redirects": follow_redirects,
-        "verify_ssl": verify_ssl,
-        "proxy": proxy,
-    }
+    h = headers if headers is not None else (cfg.headers or None)
+    p = proxy if proxy is not None else cfg.proxy
 
-    # Walk local directory for relative paths
-    local_files: set[str] = set()
-    for root, _dirs, files in os.walk(dir_path):
-        for f in files:
-            rel = os.path.relpath(os.path.join(root, f), dir_path)
-            local_files.add(rel)
-
-    url_keys = set(url_map.keys())
-    only_left = local_files - url_keys
-    only_right = url_keys - local_files
-    common = local_files & url_keys
-
-    diff: dict[str, DiffReason] = {}
-
-    if common:
-        def _cmp_entry(rel: str) -> tuple[str, bool]:
-            local_path = os.path.join(dir_path, rel)
-            return rel, compare(local_path, url_map[rel], **kwargs)
-
-        if max_workers == 1 or len(common) == 1:
-            results = [_cmp_entry(r) for r in sorted(common)]
-        else:
-            from concurrent.futures import ThreadPoolExecutor
-
-            pool_size = max_workers if max_workers > 0 else min(len(common), 8)
-            with ThreadPoolExecutor(max_workers=pool_size) as pool:
-                results = list(pool.map(_cmp_entry, sorted(common)))
-
-        for rel, eq in results:
-            if not eq:
-                diff[rel] = DiffReason.CONTENT_MISMATCH
-
-    equal = len(only_left) == 0 and len(only_right) == 0 and len(diff) == 0
-    return DirResult(
-        equal=equal,
-        diff=diff,
-        only_left=only_left,
-        only_right=only_right,
+    raw = _compare_dir_urls_c(
+        dir_path, url_map,
+        chunk_size=chunk_size,
+        size_precheck=size_precheck,
+        quick_check=quick_check,
+        headers=h if h else None,
+        timeout=timeout,
+        follow_redirects=follow_redirects,
+        verify_ssl=verify_ssl,
+        allow_private=cfg.allow_private_redirects,
+        proxy=p,
     )
+    return _build_dir_result(raw)
 
 
 __all__ = [

@@ -12,6 +12,7 @@
 #include "dirwalk.h"
 #include "compare.h"
 #include "reader_file.h"
+#include "reader_http.h"
 #include "pool.h"
 #include <stdlib.h>
 #include <string.h>
@@ -458,6 +459,193 @@ fail:
     free(tasks);
     komparu_pathlist_free(&paths_a);
     komparu_pathlist_free(&paths_b);
+    komparu_dir_result_free(result);
+    return NULL;
+}
+
+/* =========================================================================
+ * Directory vs URL map comparison — sorted merge of local tree vs URL set
+ * ========================================================================= */
+
+komparu_dir_result_t *komparu_compare_dir_urls(
+    const char *dir_path,
+    const char **rel_paths,
+    const char **urls,
+    size_t url_count,
+    const char **headers,
+    size_t chunk_size,
+    bool size_precheck,
+    bool quick_check,
+    double timeout,
+    bool follow_redirects,
+    bool verify_ssl,
+    bool allow_private,
+    const char *proxy,
+    const char **err_msg
+) {
+    if (chunk_size == 0) chunk_size = KOMPARU_DEFAULT_CHUNK_SIZE;
+
+    /* Walk local directory */
+    komparu_pathlist_t local_paths = {0};
+    if (komparu_dirwalk(dir_path, true, &local_paths, err_msg) != 0) {
+        return NULL;
+    }
+
+    /* Build sorted index over URL rel_paths */
+    size_t *url_order = NULL;
+    if (url_count > 0) {
+        url_order = malloc(url_count * sizeof(size_t));
+        if (KOMPARU_UNLIKELY(!url_order)) {
+            komparu_pathlist_free(&local_paths);
+            *err_msg = "out of memory";
+            return NULL;
+        }
+        for (size_t k = 0; k < url_count; k++) url_order[k] = k;
+
+        /* Insertion sort by rel_path — url_count is typically small */
+        for (size_t k = 1; k < url_count; k++) {
+            size_t tmp = url_order[k];
+            size_t m = k;
+            while (m > 0 && strcmp(rel_paths[url_order[m - 1]],
+                                   rel_paths[tmp]) > 0) {
+                url_order[m] = url_order[m - 1];
+                m--;
+            }
+            url_order[m] = tmp;
+        }
+    }
+
+    komparu_dir_result_t *result = komparu_dir_result_new();
+    if (KOMPARU_UNLIKELY(!result)) {
+        komparu_pathlist_free(&local_paths);
+        free(url_order);
+        *err_msg = "out of memory";
+        return NULL;
+    }
+
+    /* Sorted merge: local_paths (already sorted) vs url_order */
+    size_t li = 0, ui = 0;
+    while (li < local_paths.count && ui < url_count) {
+        size_t uidx = url_order[ui];
+        int cmp = strcmp(local_paths.paths[li], rel_paths[uidx]);
+
+        if (cmp < 0) {
+            if (KOMPARU_UNLIKELY(komparu_dir_result_add_only_left(
+                    result, local_paths.paths[li]) != 0)) {
+                *err_msg = "out of memory";
+                goto fail;
+            }
+            li++;
+        } else if (cmp > 0) {
+            if (KOMPARU_UNLIKELY(komparu_dir_result_add_only_right(
+                    result, rel_paths[uidx]) != 0)) {
+                *err_msg = "out of memory";
+                goto fail;
+            }
+            ui++;
+        } else {
+            /* Common entry — compare local file vs URL */
+            char full_path[PATH_MAX];
+            snprintf(full_path, sizeof(full_path), "%s/%s",
+                     dir_path, local_paths.paths[li]);
+
+            const char *open_err = NULL;
+            komparu_reader_t *ra = komparu_reader_file_open(full_path, &open_err);
+            if (!ra) {
+                komparu_dir_result_add_diff(result, local_paths.paths[li],
+                                            KOMPARU_DIFF_READ_ERROR);
+                li++; ui++;
+                continue;
+            }
+
+            komparu_reader_t *rb = komparu_reader_http_open_ex(
+                urls[uidx], headers,
+                timeout, follow_redirects, verify_ssl, allow_private,
+                proxy, &open_err);
+            if (!rb) {
+                ra->close(ra);
+                komparu_dir_result_add_diff(result, local_paths.paths[li],
+                                            KOMPARU_DIFF_READ_ERROR);
+                li++; ui++;
+                continue;
+            }
+
+            /* Size pre-check */
+            if (size_precheck) {
+                int64_t sa = ra->get_size(ra);
+                int64_t sb = rb->get_size(rb);
+                if (sa >= 0 && sb >= 0 && sa != sb) {
+                    ra->close(ra);
+                    rb->close(rb);
+                    komparu_dir_result_add_diff(result, local_paths.paths[li],
+                                                KOMPARU_DIFF_SIZE);
+                    li++; ui++;
+                    continue;
+                }
+            }
+
+            /* Quick check */
+            if (quick_check) {
+                const char *qerr = NULL;
+                komparu_result_t qr = komparu_quick_check(
+                    ra, rb, chunk_size, &qerr);
+                if (qr == KOMPARU_DIFFERENT) {
+                    ra->close(ra);
+                    rb->close(rb);
+                    komparu_dir_result_add_diff(result, local_paths.paths[li],
+                                                KOMPARU_DIFF_CONTENT);
+                    li++; ui++;
+                    continue;
+                }
+                if (qr == KOMPARU_ERROR && ra->seek && rb->seek) {
+                    ra->seek(ra, 0);
+                    rb->seek(rb, 0);
+                }
+            }
+
+            /* Full comparison */
+            const char *cmp_err = NULL;
+            komparu_result_t cr = komparu_compare(
+                ra, rb, chunk_size, false, &cmp_err);
+            ra->close(ra);
+            rb->close(rb);
+
+            if (cr == KOMPARU_DIFFERENT)
+                komparu_dir_result_add_diff(result, local_paths.paths[li],
+                                            KOMPARU_DIFF_CONTENT);
+            else if (cr == KOMPARU_ERROR)
+                komparu_dir_result_add_diff(result, local_paths.paths[li],
+                                            KOMPARU_DIFF_READ_ERROR);
+
+            li++; ui++;
+        }
+    }
+
+    while (li < local_paths.count) {
+        if (KOMPARU_UNLIKELY(komparu_dir_result_add_only_left(
+                result, local_paths.paths[li]) != 0)) {
+            *err_msg = "out of memory";
+            goto fail;
+        }
+        li++;
+    }
+    while (ui < url_count) {
+        size_t uidx = url_order[ui];
+        if (KOMPARU_UNLIKELY(komparu_dir_result_add_only_right(
+                result, rel_paths[uidx]) != 0)) {
+            *err_msg = "out of memory";
+            goto fail;
+        }
+        ui++;
+    }
+
+    komparu_pathlist_free(&local_paths);
+    free(url_order);
+    return result;
+
+fail:
+    komparu_pathlist_free(&local_paths);
+    free(url_order);
     komparu_dir_result_free(result);
     return NULL;
 }

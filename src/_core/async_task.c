@@ -438,162 +438,33 @@ static void compare_archive_worker(void *arg) {
  * Worker: directory vs URL map comparison
  * ========================================================================= */
 
-static int url_entry_cmp(const void *a, const void *b) {
-    return strcmp(*(const char *const *)a, *(const char *const *)b);
-}
-
 static void compare_dir_urls_worker(void *arg) {
     komparu_async_task_t *task = (komparu_async_task_t *)arg;
     const char *err = NULL;
 
-    /* Walk local directory */
-    komparu_pathlist_t local_paths = {0};
-    if (komparu_dirwalk(task->source_a, true, &local_paths, &err) != 0) {
+    task->dir_result = komparu_compare_dir_urls(
+        task->source_a,
+        (const char **)task->url_rel_paths,
+        (const char **)task->url_urls,
+        task->url_count,
+        (const char **)task->headers,
+        task->chunk_size,
+        task->size_precheck,
+        task->quick_check,
+        task->timeout,
+        task->follow_redirects,
+        task->verify_ssl,
+        task->allow_private,
+        task->proxy,
+        &err);
+
+    if (!task->dir_result) {
         snprintf(task->error_buf, sizeof(task->error_buf),
-                 "dirwalk failed: %s", err ? err : "unknown error");
+                 "dir_urls comparison failed: %s",
+                 err ? err : "unknown error");
         task->has_error = true;
-        worker_finish(task);
-        return;
     }
 
-    /* Sort url rel_paths for merge (make index-sorted copy) */
-    size_t *url_order = malloc(task->url_count * sizeof(size_t));
-    if (!url_order && task->url_count > 0) {
-        komparu_pathlist_free(&local_paths);
-        snprintf(task->error_buf, sizeof(task->error_buf), "out of memory");
-        task->has_error = true;
-        worker_finish(task);
-        return;
-    }
-    for (size_t k = 0; k < task->url_count; k++) url_order[k] = k;
-
-    /* Sort indices by rel_path */
-    /* Simple insertion sort — url_count is typically small */
-    for (size_t k = 1; k < task->url_count; k++) {
-        size_t tmp = url_order[k];
-        size_t m = k;
-        while (m > 0 && strcmp(task->url_rel_paths[url_order[m - 1]],
-                               task->url_rel_paths[tmp]) > 0) {
-            url_order[m] = url_order[m - 1];
-            m--;
-        }
-        url_order[m] = tmp;
-    }
-
-    komparu_dir_result_t *result = komparu_dir_result_new();
-    if (!result) {
-        komparu_pathlist_free(&local_paths);
-        free(url_order);
-        snprintf(task->error_buf, sizeof(task->error_buf), "out of memory");
-        task->has_error = true;
-        worker_finish(task);
-        return;
-    }
-
-    /* Sorted merge: local_paths (already sorted) vs url_order */
-    size_t li = 0, ui = 0;
-    while (li < local_paths.count && ui < task->url_count) {
-        size_t uidx = url_order[ui];
-        int cmp = strcmp(local_paths.paths[li], task->url_rel_paths[uidx]);
-
-        if (cmp < 0) {
-            komparu_dir_result_add_only_left(result, local_paths.paths[li]);
-            li++;
-        } else if (cmp > 0) {
-            komparu_dir_result_add_only_right(result, task->url_rel_paths[uidx]);
-            ui++;
-        } else {
-            /* Common entry — compare local file vs URL */
-            char full_path[4096];
-            snprintf(full_path, sizeof(full_path), "%s/%s",
-                     task->source_a, local_paths.paths[li]);
-
-            const char *open_err = NULL;
-            komparu_reader_t *ra = komparu_reader_file_open(full_path, &open_err);
-            if (!ra) {
-                komparu_dir_result_add_diff(result, local_paths.paths[li],
-                                            KOMPARU_DIFF_READ_ERROR);
-                li++; ui++;
-                continue;
-            }
-
-            komparu_reader_t *rb = komparu_reader_http_open_ex(
-                task->url_urls[uidx],
-                (const char **)task->headers,
-                task->timeout, task->follow_redirects,
-                task->verify_ssl, task->allow_private,
-                task->proxy, &open_err);
-            if (!rb) {
-                ra->close(ra);
-                komparu_dir_result_add_diff(result, local_paths.paths[li],
-                                            KOMPARU_DIFF_READ_ERROR);
-                li++; ui++;
-                continue;
-            }
-
-            /* Size pre-check */
-            if (task->size_precheck) {
-                int64_t sa = ra->get_size(ra);
-                int64_t sb = rb->get_size(rb);
-                if (sa >= 0 && sb >= 0 && sa != sb) {
-                    ra->close(ra);
-                    rb->close(rb);
-                    komparu_dir_result_add_diff(result, local_paths.paths[li],
-                                                KOMPARU_DIFF_SIZE);
-                    li++; ui++;
-                    continue;
-                }
-            }
-
-            /* Quick check */
-            if (task->quick_check) {
-                const char *qerr = NULL;
-                komparu_result_t qr = komparu_quick_check(
-                    ra, rb, task->chunk_size, &qerr);
-                if (qr == KOMPARU_DIFFERENT) {
-                    ra->close(ra);
-                    rb->close(rb);
-                    komparu_dir_result_add_diff(result, local_paths.paths[li],
-                                                KOMPARU_DIFF_CONTENT);
-                    li++; ui++;
-                    continue;
-                }
-                if (qr == KOMPARU_ERROR && ra->seek && rb->seek) {
-                    ra->seek(ra, 0);
-                    rb->seek(rb, 0);
-                }
-            }
-
-            const char *cmp_err = NULL;
-            komparu_result_t cr = komparu_compare(
-                ra, rb, task->chunk_size, false, &cmp_err);
-            ra->close(ra);
-            rb->close(rb);
-
-            if (cr == KOMPARU_DIFFERENT)
-                komparu_dir_result_add_diff(result, local_paths.paths[li],
-                                            KOMPARU_DIFF_CONTENT);
-            else if (cr == KOMPARU_ERROR)
-                komparu_dir_result_add_diff(result, local_paths.paths[li],
-                                            KOMPARU_DIFF_READ_ERROR);
-
-            li++; ui++;
-        }
-    }
-
-    while (li < local_paths.count) {
-        komparu_dir_result_add_only_left(result, local_paths.paths[li]);
-        li++;
-    }
-    while (ui < task->url_count) {
-        size_t uidx = url_order[ui];
-        komparu_dir_result_add_only_right(result, task->url_rel_paths[uidx]);
-        ui++;
-    }
-
-    komparu_pathlist_free(&local_paths);
-    free(url_order);
-    task->dir_result = result;
     worker_finish(task);
 }
 

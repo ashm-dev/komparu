@@ -518,6 +518,181 @@ static PyObject *py_compare_archive(PyObject *self, PyObject *args, PyObject *kw
 }
 
 /* =========================================================================
+ * Python wrapper: compare_dir_urls(dir_path, url_map, ...) -> dict
+ * ========================================================================= */
+
+static PyObject *py_compare_dir_urls(PyObject *self, PyObject *args, PyObject *kwargs) {
+    (void)self;
+
+    const char *dir_path = NULL;
+    PyObject *py_url_map = NULL;
+    Py_ssize_t chunk_size = KOMPARU_DEFAULT_CHUNK_SIZE;
+    int size_precheck = 1;
+    int quick_check = 1;
+    PyObject *py_headers = Py_None;
+    double timeout = 30.0;
+    int follow_redirects = 1;
+    int verify_ssl = 1;
+    int allow_private = 0;
+    const char *proxy = NULL;
+
+    static char *kwlist[] = {
+        "dir_path", "url_map", "chunk_size", "size_precheck", "quick_check",
+        "headers", "timeout", "follow_redirects", "verify_ssl", "allow_private",
+        "proxy", NULL
+    };
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "sO|nppOdpppz", kwlist,
+            &dir_path, &py_url_map, &chunk_size, &size_precheck, &quick_check,
+            &py_headers, &timeout, &follow_redirects, &verify_ssl,
+            &allow_private, &proxy)) {
+        return NULL;
+    }
+
+    if (!PyDict_Check(py_url_map)) {
+        PyErr_SetString(PyExc_TypeError, "url_map must be a dict");
+        return NULL;
+    }
+
+    if (chunk_size <= 0) {
+        PyErr_SetString(PyExc_ValueError, "chunk_size must be positive");
+        return NULL;
+    }
+
+    if (py_headers != Py_None && !PyDict_Check(py_headers)) {
+        PyErr_SetString(PyExc_TypeError, "headers must be a dict or None");
+        return NULL;
+    }
+
+    /* Convert url_map dict to parallel C arrays */
+    Py_ssize_t map_size = PyDict_Size(py_url_map);
+    char **rel_paths = NULL;
+    char **url_strs = NULL;
+
+    if (map_size > 0) {
+        rel_paths = calloc((size_t)map_size, sizeof(char *));
+        url_strs = calloc((size_t)map_size, sizeof(char *));
+        if (!rel_paths || !url_strs) {
+            free(rel_paths);
+            free(url_strs);
+            PyErr_NoMemory();
+            return NULL;
+        }
+
+        PyObject *key, *value;
+        Py_ssize_t pos = 0;
+        Py_ssize_t idx = 0;
+        while (PyDict_Next(py_url_map, &pos, &key, &value)) {
+            const char *k = PyUnicode_AsUTF8(key);
+            const char *v = PyUnicode_AsUTF8(value);
+            if (!k || !v) {
+                /* Free already-duped strings */
+                for (Py_ssize_t j = 0; j < idx; j++) {
+                    free(rel_paths[j]);
+                    free(url_strs[j]);
+                }
+                free(rel_paths);
+                free(url_strs);
+                PyErr_SetString(PyExc_TypeError,
+                                "url_map keys and values must be strings");
+                return NULL;
+            }
+            rel_paths[idx] = strdup(k);
+            url_strs[idx] = strdup(v);
+            if (!rel_paths[idx] || !url_strs[idx]) {
+                /* Cleanup on OOM */
+                for (Py_ssize_t j = 0; j <= idx; j++) {
+                    free(rel_paths[j]);
+                    free(url_strs[j]);
+                }
+                free(rel_paths);
+                free(url_strs);
+                PyErr_NoMemory();
+                return NULL;
+            }
+            idx++;
+        }
+    }
+
+    /* Build headers */
+    const char *err_msg = NULL;
+    size_t header_count = 0;
+    const char **header_array = build_header_array(
+        py_headers, &header_count, &err_msg);
+    if (err_msg) {
+        for (Py_ssize_t j = 0; j < map_size; j++) {
+            free(rel_paths[j]);
+            free(url_strs[j]);
+        }
+        free(rel_paths);
+        free(url_strs);
+        PyErr_SetString(PyExc_ValueError, err_msg);
+        return NULL;
+    }
+
+    /* Copy dir_path and proxy — PyArg strings are only valid with GIL */
+    char *dir_copy = strdup(dir_path);
+    char *proxy_copy = proxy ? strdup(proxy) : NULL;
+    if (!dir_copy || (proxy && !proxy_copy)) {
+        free(dir_copy);
+        free(proxy_copy);
+        for (Py_ssize_t j = 0; j < map_size; j++) {
+            free(rel_paths[j]);
+            free(url_strs[j]);
+        }
+        free(rel_paths);
+        free(url_strs);
+        free_header_array(header_array, header_count);
+        PyErr_NoMemory();
+        return NULL;
+    }
+
+    komparu_dir_result_t *result;
+
+    KOMPARU_GIL_STATE_DECL
+    KOMPARU_GIL_RELEASE()
+
+    result = komparu_compare_dir_urls(
+        dir_copy,
+        (const char **)rel_paths,
+        (const char **)url_strs,
+        (size_t)map_size,
+        header_array,
+        (size_t)chunk_size,
+        (bool)size_precheck,
+        (bool)quick_check,
+        timeout,
+        (bool)follow_redirects,
+        (bool)verify_ssl,
+        (bool)allow_private,
+        proxy_copy,
+        &err_msg);
+
+    KOMPARU_GIL_ACQUIRE()
+
+    /* Cleanup C copies */
+    free(dir_copy);
+    free(proxy_copy);
+    for (Py_ssize_t j = 0; j < map_size; j++) {
+        free(rel_paths[j]);
+        free(url_strs[j]);
+    }
+    free(rel_paths);
+    free(url_strs);
+    free_header_array(header_array, header_count);
+
+    if (!result) {
+        PyErr_Format(PyExc_IOError, "dir_urls comparison failed: %s",
+                     err_msg ? err_msg : "unknown error");
+        return NULL;
+    }
+
+    PyObject *py_result = dir_result_to_python(result);
+    komparu_dir_result_free(result);
+    return py_result;
+}
+
+/* =========================================================================
  * Python wrapper: compare_buffers(buf_a, buf_b) -> bool
  * ========================================================================= */
 
@@ -966,6 +1141,14 @@ static PyMethodDef module_methods[] = {
         "compare_archive(path_a, path_b, *, chunk_size=65536, hash_compare=False) -> dict\n\n"
         "Compare two archive files entry-by-entry.\n"
         "hash_compare: use streaming hash (O(entries) memory).\n"
+        "Returns dict with equal, diff, only_left, only_right."
+    },
+    {
+        "compare_dir_urls",
+        (PyCFunction)(void(*)(void))py_compare_dir_urls,
+        METH_VARARGS | METH_KEYWORDS,
+        "compare_dir_urls(dir_path, url_map, ...) -> dict\n\n"
+        "Compare local directory against URL mapping.\n"
         "Returns dict with equal, diff, only_left, only_right."
     },
     {

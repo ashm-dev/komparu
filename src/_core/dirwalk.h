@@ -83,4 +83,33 @@ komparu_dir_result_t *komparu_compare_dirs(
     const char **err_msg
 );
 
+/**
+ * Compare local directory files against a URL mapping.
+ *
+ * Walks dir_path with komparu_dirwalk, merge-compares against the URL map,
+ * opens file + HTTP readers for each common entry and compares content.
+ * All I/O in C — no Python involvement.
+ *
+ * rel_paths/urls: parallel arrays of length url_count.
+ * headers: NULL-terminated "Key: Value" array, or NULL.
+ * Returns allocated dir_result_t on success, NULL on error.
+ * Caller must free with komparu_dir_result_free().
+ */
+komparu_dir_result_t *komparu_compare_dir_urls(
+    const char *dir_path,
+    const char **rel_paths,
+    const char **urls,
+    size_t url_count,
+    const char **headers,
+    size_t chunk_size,
+    bool size_precheck,
+    bool quick_check,
+    double timeout,
+    bool follow_redirects,
+    bool verify_ssl,
+    bool allow_private,
+    const char *proxy,
+    const char **err_msg
+);
+
 #endif /* KOMPARU_DIRWALK_H */
