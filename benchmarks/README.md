@@ -65,7 +65,8 @@ JSON results are saved to `results/` for independent verification.
 ### File Comparison
 - **identical**: Both files byte-identical (worst case for comparison — must read everything)
 - **differ_first**: First byte differs (best case — early exit)
-- **differ_last**: Last byte differs (worst case — must read everything, then find difference)
+- **differ_quarter**: Byte at 25% offset differs (quick_check misses it — honest sequential scan)
+- **differ_last**: Last byte differs (quick_check catches it — O(1) for komparu)
 - **Sizes**: 1MB, 10MB, 100MB, 1GB
 
 ### Directory Comparison
@@ -84,6 +85,12 @@ that benefits real-world workloads — most file changes modify the end of the f
 
 Other tools (filecmp, cmp, Go, Rust) read files sequentially from the beginning,
 so they must read the entire file to find a difference at the end.
+
+### Why "differ_quarter" is the honest comparison
+The **differ_quarter** scenario places the difference at 25% of the file — a position
+that quick_check does NOT sample (it only checks 0%, 50%, 100%). This forces komparu
+into a full sequential mmap+memcmp scan, showing its raw I/O performance without
+any shortcut. This is the fairest apples-to-apples comparison of I/O engines.
 
 ### Why filecmp is faster on "differ_first" for small files
 filecmp uses a simple buffered read with minimal setup overhead. For very small

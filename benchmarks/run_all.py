@@ -18,6 +18,7 @@ from conftest import RESULTS_DIR, cleanup_tmpfs, ensure_competitors, ensure_tmpf
 
 import bench_file
 import bench_dir
+import bench_memory
 
 
 def format_time(seconds: float) -> str:
@@ -117,6 +118,10 @@ def main():
         # Directory benchmarks
         print("\n\n>>> DIRECTORY BENCHMARKS <<<\n")
         dir_results = bench_dir.run_benchmarks(fast=args.fast)
+
+        # Memory benchmarks
+        print("\n\n>>> MEMORY BENCHMARKS <<<\n")
+        mem_results = bench_memory.run_benchmarks(fast=args.fast)
 
         # Combined report
         print("\n\n>>> COMBINED REPORT <<<\n")

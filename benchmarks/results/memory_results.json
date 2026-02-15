@@ -1,0 +1,94 @@
+{
+  "memory_1MB_identical": {
+    "komparu": {
+      "peak_heap_bytes": 425
+    },
+    "filecmp (deep)": {
+      "peak_heap_bytes": 33999
+    },
+    "filecmp (shallow)": {
+      "peak_heap_bytes": 835
+    },
+    "hashlib SHA-256": {
+      "peak_heap_bytes": 136455
+    },
+    "cmp -s": {
+      "peak_rss_bytes": 1318912
+    },
+    "Go": {
+      "peak_rss_bytes": 741376
+    },
+    "Rust": {
+      "peak_rss_bytes": 540672
+    }
+  },
+  "memory_10MB_identical": {
+    "komparu": {
+      "peak_heap_bytes": 425
+    },
+    "filecmp (deep)": {
+      "peak_heap_bytes": 33999
+    },
+    "filecmp (shallow)": {
+      "peak_heap_bytes": 836
+    },
+    "hashlib SHA-256": {
+      "peak_heap_bytes": 136455
+    },
+    "cmp -s": {
+      "peak_rss_bytes": 2306048
+    },
+    "Go": {
+      "peak_rss_bytes": 2338816
+    },
+    "Rust": {
+      "peak_rss_bytes": 2326528
+    }
+  },
+  "memory_100MB_identical": {
+    "komparu": {
+      "peak_heap_bytes": 425
+    },
+    "filecmp (deep)": {
+      "peak_heap_bytes": 33999
+    },
+    "filecmp (shallow)": {
+      "peak_heap_bytes": 837
+    },
+    "hashlib SHA-256": {
+      "peak_heap_bytes": 136455
+    },
+    "cmp -s": {
+      "peak_rss_bytes": 2240512
+    },
+    "Go": {
+      "peak_rss_bytes": 2347008
+    },
+    "Rust": {
+      "peak_rss_bytes": 2326528
+    }
+  },
+  "memory_1GB_identical": {
+    "komparu": {
+      "peak_heap_bytes": 425
+    },
+    "filecmp (deep)": {
+      "peak_heap_bytes": 33999
+    },
+    "filecmp (shallow)": {
+      "peak_heap_bytes": 835
+    },
+    "hashlib SHA-256": {
+      "peak_heap_bytes": 136455
+    },
+    "cmp -s": {
+      "peak_rss_bytes": 2228224
+    },
+    "Go": {
+      "peak_rss_bytes": 2351104
+    },
+    "Rust": {
+      "peak_rss_bytes": 2260992
+    }
+  }
+}

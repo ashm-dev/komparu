@@ -130,7 +130,15 @@ All benchmarks on tmpfs (/dev/shm) with page cache warmed. 20 samples per benchm
 
 komparu is consistently at the bottom (fastest). For identical files it is **1.3x faster** than filecmp (Python stdlib) and competitive with native Go/Rust implementations.
 
-### File Comparison: Last Byte Differs
+### File Comparison: Differ at 25% (Honest Sequential Scan)
+
+<p align="center">
+  <img src="benchmarks/charts/file_differ_quarter.png" width="700" alt="Differ at 25% benchmark">
+</p>
+
+The fairest comparison: difference at 25% of the file, a position **quick_check does NOT sample**. komparu must do a real sequential mmap+memcmp scan here, showing its raw I/O advantage without any shortcuts.
+
+### File Comparison: Last Byte Differs (Quick Check)
 
 <p align="center">
   <img src="benchmarks/charts/file_differ_last.png" width="700" alt="Last byte differs benchmark">
@@ -146,13 +154,27 @@ komparu's **quick_check** samples first/last/middle bytes before scanning. This 
 
 komparu's native thread pool gives **2-3x** speedup over filecmp and outperforms Go/Rust implementations across all directory scenarios.
 
+### Memory Usage
+
+<p align="center">
+  <img src="benchmarks/charts/memory_usage.png" width="700" alt="Memory usage benchmark">
+</p>
+
+komparu allocates just **425 bytes** of Python heap regardless of file size (mmap pages are managed by the kernel). filecmp needs 33KB (8KB buffers x2), hashlib needs 133KB (SHA-256 context + buffer). Note: `filecmp shallow=True` only checks file stat, not content.
+
+### Multi-Dimensional Comparison
+
+<p align="center">
+  <img src="benchmarks/charts/radar_comparison.png" width="600" alt="Radar comparison">
+</p>
+
 ### Speedup Heatmap
 
 <p align="center">
   <img src="benchmarks/charts/speedup_heatmap.png" width="650" alt="Speedup heatmap">
 </p>
 
-Green = komparu faster. The bottom row shows quick_check detecting a 1GB last-byte difference **12,000x** faster than filecmp.
+Green = komparu faster. Dark green cells in `differ_last` rows show quick_check advantage. Compare with `differ_quarter` rows for honest sequential performance.
 
 <details>
 <summary>Raw numbers (median time)</summary>
@@ -161,22 +183,32 @@ Green = komparu faster. The bottom row shows quick_check detecting a 1GB last-by
 
 | Scenario | Size | komparu | filecmp | cmp -s | Go | Rust |
 |----------|------|---------|---------|--------|----|------|
-| identical | 1MB | 310us | 453us | 1.45ms | 2.22ms | 2.05ms |
-| identical | 10MB | 5.12ms | 5.53ms | 6.82ms | 6.76ms | 11.45ms |
-| identical | 100MB | 41ms | 57ms | 80ms | 36ms | 44ms |
-| identical | 1GB | 285ms | 379ms | 341ms | 291ms | 302ms |
-| differ_last | 1MB | 53us | 441us | 1.03ms | 1.17ms | 1.01ms |
-| differ_last | 10MB | 46us | 5.89ms | 6.47ms | 5.97ms | 5.77ms |
-| differ_last | 100MB | 46us | 58ms | 36ms | 31ms | 32ms |
-| differ_last | 1GB | 30us | 373ms | 346ms | 295ms | 303ms |
+| identical | 1MB | 157us | 210us | 575us | 926us | 683us |
+| identical | 10MB | 2.29ms | 3.80ms | 4.05ms | 3.81ms | 3.69ms |
+| identical | 100MB | 30ms | 38ms | 36ms | 31ms | 32ms |
+| identical | 1GB | 284ms | 368ms | 336ms | 288ms | 291ms |
+| differ_quarter | 1MB | 70us | 54us | 526us | 742us | 521us |
+| differ_quarter | 10MB | 432us | 663us | 1.20ms | 1.44ms | 1.23ms |
+| differ_quarter | 100MB | 6.7ms | 9.6ms | 9.5ms | 8.4ms | 8.7ms |
+| differ_quarter | 1GB | 77ms | 96ms | 89ms | 77ms | 78ms |
+| differ_last | 1MB | 25us | 206us | 598us | 907us | 631us |
+| differ_last | 10MB | 27us | 3.79ms | 4.08ms | 3.91ms | 3.78ms |
+| differ_last | 100MB | 27us | 39ms | 36ms | 31ms | 32ms |
+| differ_last | 1GB | 30us | 375ms | 342ms | 295ms | 299ms |
 
 **Directory Comparison**
 
 | Scenario | komparu | filecmp | Go | Rust |
 |----------|---------|---------|-----|------|
-| 100 files x 1MB, identical | 14ms | 42ms | 34ms | 32ms |
-| 100 files x 1MB, 1 differs | 14ms | 41ms | 36ms | 37ms |
-| 1000 files x 100KB, identical | 24ms | 54ms | 42ms | 38ms |
+| 100 files x 1MB, identical | 13ms | 41ms | 34ms | 33ms |
+| 100 files x 1MB, 1 differs | 13ms | 42ms | 34ms | 33ms |
+| 1000 files x 100KB, identical | 23ms | 54ms | 43ms | 39ms |
+
+**Memory (Python heap allocation)**
+
+| Size | komparu | filecmp (deep) | filecmp (shallow) | hashlib SHA-256 |
+|------|---------|----------------|-------------------|-----------------|
+| 1MB-1GB | 425 B | 33.2 KB | 835 B | 133.3 KB |
 
 </details>
 

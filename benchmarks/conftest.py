@@ -70,6 +70,7 @@ def create_test_files(
         "identical"         — both files byte-identical
         "differ_first"      — first byte differs
         "differ_last"       — last byte differs
+        "differ_quarter"    — byte at 25% offset differs (NOT checked by quick_check)
     """
     base.mkdir(parents=True, exist_ok=True)
     file_a = base / "file_a"
@@ -89,6 +90,14 @@ def create_test_files(
             last = f.read(1)
             f.seek(-1, 2)
             f.write(bytes([(last[0] ^ 0xFF)]))
+    elif scenario == "differ_quarter":
+        # Flip byte at 25% — quick_check only samples 0%, 50%, 100%
+        with open(file_b, "r+b") as f:
+            pos = size // 4
+            f.seek(pos)
+            byte = f.read(1)
+            f.seek(pos)
+            f.write(bytes([(byte[0] ^ 0xFF)]))
 
     return file_a, file_b
 

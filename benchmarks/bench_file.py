@@ -55,7 +55,7 @@ SIZES = {
     "1GB": 1 * GB,
 }
 
-SCENARIOS = ["identical", "differ_first", "differ_last"]
+SCENARIOS = ["identical", "differ_first", "differ_last", "differ_quarter"]
 
 WARMUP_RUNS = 3
 REPEATS = 20        # number of timed samples
