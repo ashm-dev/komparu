@@ -10,6 +10,7 @@
 #include "compare.h"
 #include "reader_file.h"
 #include "reader_http.h"
+#include "curl_share.h"
 #include "dirwalk.h"
 #include "reader_archive.h"
 #include "async_task.h"
@@ -456,17 +457,18 @@ static PyObject *py_compare_archive(PyObject *self, PyObject *args, PyObject *kw
     int max_compression_ratio = -1;
     long long max_entries = -1;
     long long max_entry_name_length = -1;
+    int hash_compare = 0;
 
     static char *kwlist[] = {
         "path_a", "path_b", "chunk_size",
         "max_decompressed_size", "max_compression_ratio",
-        "max_entries", "max_entry_name_length", NULL
+        "max_entries", "max_entry_name_length", "hash_compare", NULL
     };
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ss|nLiLL", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ss|nLiLLp", kwlist,
             &path_a, &path_b, &chunk_size,
             &max_decompressed_size, &max_compression_ratio,
-            &max_entries, &max_entry_name_length)) {
+            &max_entries, &max_entry_name_length, &hash_compare)) {
         return NULL;
     }
 
@@ -491,8 +493,13 @@ static PyObject *py_compare_archive(PyObject *self, PyObject *args, PyObject *kw
     KOMPARU_GIL_STATE_DECL
     KOMPARU_GIL_RELEASE()
 
-    result = komparu_compare_archives(pa, pb,
-        (size_t)chunk_size, mds, mcr, me, menl, &err_msg);
+    if (hash_compare) {
+        result = komparu_compare_archives_hashed(pa, pb,
+            mds, mcr, me, menl, NULL, &err_msg);
+    } else {
+        result = komparu_compare_archives(pa, pb,
+            (size_t)chunk_size, mds, mcr, me, menl, &err_msg);
+    }
 
     KOMPARU_GIL_ACQUIRE()
 
@@ -730,17 +737,18 @@ static PyObject *py_async_compare_archive_start(PyObject *self, PyObject *args, 
     int max_compression_ratio = -1;
     long long max_entries = -1;
     long long max_entry_name_length = -1;
+    int hash_compare = 0;
 
     static char *kwlist[] = {
         "path_a", "path_b", "chunk_size",
         "max_decompressed_size", "max_compression_ratio",
-        "max_entries", "max_entry_name_length", NULL
+        "max_entries", "max_entry_name_length", "hash_compare", NULL
     };
 
-    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ss|nLiLL", kwlist,
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ss|nLiLLp", kwlist,
             &path_a, &path_b, &chunk_size,
             &max_decompressed_size, &max_compression_ratio,
-            &max_entries, &max_entry_name_length)) {
+            &max_entries, &max_entry_name_length, &hash_compare)) {
         return NULL;
     }
 
@@ -752,7 +760,7 @@ static PyObject *py_async_compare_archive_start(PyObject *self, PyObject *args, 
     const char *err_msg = NULL;
     komparu_async_task_t *task = komparu_async_compare_archive(
         path_a, path_b, (size_t)chunk_size,
-        mds, mcr, me, menl, &err_msg);
+        mds, mcr, me, menl, hash_compare, &err_msg);
 
     if (!task) {
         PyErr_Format(PyExc_RuntimeError, "async compare_archive failed: %s",
@@ -955,8 +963,9 @@ static PyMethodDef module_methods[] = {
         "compare_archive",
         (PyCFunction)(void(*)(void))py_compare_archive,
         METH_VARARGS | METH_KEYWORDS,
-        "compare_archive(path_a, path_b, *, chunk_size=65536) -> dict\n\n"
+        "compare_archive(path_a, path_b, *, chunk_size=65536, hash_compare=False) -> dict\n\n"
         "Compare two archive files entry-by-entry.\n"
+        "hash_compare: use streaming hash (O(entries) memory).\n"
         "Returns dict with equal, diff, only_left, only_right."
     },
     {
@@ -1058,6 +1067,14 @@ PyMODINIT_FUNC PyInit__core(void) {
                         "failed to initialize libcurl");
         return NULL;
     }
+
+    /* Initialize curl share handle for DNS/connection/TLS reuse */
+    if (komparu_curl_share_init() != 0) {
+        PyErr_SetString(PyExc_RuntimeError,
+                        "failed to initialize curl share handle");
+        return NULL;
+    }
+    Py_AtExit(komparu_curl_share_cleanup);
 
     return PyModuleDef_Init(&module_def);
 }

@@ -11,6 +11,7 @@
  */
 
 #include "reader_http.h"
+#include "curl_share.h"
 #include <curl/curl.h>
 #include <stdlib.h>
 #include <string.h>
@@ -383,6 +384,12 @@ komparu_reader_t *komparu_reader_http_open_ex(
         free(ctx);
         free(reader);
         return NULL;
+    }
+
+    /* ---- Attach shared DNS/connection/TLS cache ---- */
+    CURLSH *share = komparu_curl_share_get();
+    if (share) {
+        curl_easy_setopt(ctx->easy, CURLOPT_SHARE, share);
     }
 
     /* ---- Basic configuration ---- */

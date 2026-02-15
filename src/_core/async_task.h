@@ -101,6 +101,7 @@ komparu_async_task_t *komparu_async_compare_archive(
     int max_compression_ratio,
     int64_t max_entries,
     int64_t max_entry_name_length,
+    int hash_compare,
     const char **err_msg
 );
 

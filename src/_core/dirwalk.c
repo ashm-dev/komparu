@@ -22,6 +22,50 @@
 static _Thread_local char dirwalk_errbuf[512];
 
 /* =========================================================================
+ * Arena allocator — contiguous string storage in 64KB blocks
+ * ========================================================================= */
+
+#define ARENA_BLOCK_SIZE (64 * 1024)  /* 64KB blocks */
+
+static komparu_arena_block_t *arena_block_new(size_t min_size) {
+    size_t cap = min_size > ARENA_BLOCK_SIZE ? min_size : ARENA_BLOCK_SIZE;
+    komparu_arena_block_t *b = malloc(sizeof(*b) + cap);
+    if (KOMPARU_UNLIKELY(!b)) return NULL;
+    b->next = NULL;
+    b->used = 0;
+    b->capacity = cap;
+    return b;
+}
+
+static char *arena_strdup(komparu_arena_t *arena, const char *s, size_t len) {
+    /* len must include the NUL terminator */
+    komparu_arena_block_t *blk = arena->current;
+    if (!blk || blk->used + len > blk->capacity) {
+        komparu_arena_block_t *nb = arena_block_new(len);
+        if (KOMPARU_UNLIKELY(!nb)) return NULL;
+        if (blk) blk->next = nb;
+        else arena->head = nb;
+        arena->current = nb;
+        blk = nb;
+    }
+    char *dst = blk->data + blk->used;
+    memcpy(dst, s, len);
+    blk->used += len;
+    return dst;
+}
+
+static void arena_free(komparu_arena_t *arena) {
+    komparu_arena_block_t *b = arena->head;
+    while (b) {
+        komparu_arena_block_t *next = b->next;
+        free(b);
+        b = next;
+    }
+    arena->head = NULL;
+    arena->current = NULL;
+}
+
+/* =========================================================================
  * Pathlist helpers
  * ========================================================================= */
 
@@ -36,11 +80,13 @@ static int pathlist_append(komparu_pathlist_t *list, const char *path, const cha
         list->paths = tmp;
         list->capacity = new_cap;
     }
-    list->paths[list->count] = strdup(path);
-    if (KOMPARU_UNLIKELY(!list->paths[list->count])) {
+    size_t len = strlen(path) + 1;
+    char *copy = arena_strdup(&list->arena, path, len);
+    if (KOMPARU_UNLIKELY(!copy)) {
         *err_msg = "out of memory";
         return -1;
     }
+    list->paths[list->count] = copy;
     list->count++;
     return 0;
 }
@@ -51,8 +97,7 @@ static int path_cmp(const void *a, const void *b) {
 
 void komparu_pathlist_free(komparu_pathlist_t *list) {
     if (!list) return;
-    for (size_t i = 0; i < list->count; i++)
-        free(list->paths[i]);
+    arena_free(&list->arena);
     free(list->paths);
     list->paths = NULL;
     list->count = 0;

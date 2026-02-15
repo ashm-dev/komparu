@@ -162,11 +162,15 @@ async def compare_archive(
     max_compression_ratio: int = 200,
     max_archive_entries: int = 100_000,
     max_entry_name_length: int = 4096,
+    hash_compare: bool = False,
 ) -> DirResult:
     """Compare two archive files entry-by-entry (async).
 
     Archive I/O runs in a C thread via libarchive. Completion
     notification via eventfd integrated with asyncio.
+
+    :param hash_compare: Use hash-based comparison (O(entries) memory
+        instead of O(total_decompressed)).
     """
     fd, task = async_compare_archive_start(
         path_a, path_b,
@@ -175,6 +179,7 @@ async def compare_archive(
         max_compression_ratio=max_compression_ratio,
         max_entries=max_archive_entries,
         max_entry_name_length=max_entry_name_length,
+        hash_compare=hash_compare,
     )
 
     raw = await _await_task(fd, lambda: async_compare_archive_result(task))

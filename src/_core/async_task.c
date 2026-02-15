@@ -82,6 +82,7 @@ struct komparu_async_task {
     int max_compression_ratio;
     int64_t max_entries;
     int64_t max_entry_name_length;
+    int hash_compare;
 
     /* Dir_urls-specific */
     char **url_rel_paths;   /* owned copies */
@@ -387,14 +388,24 @@ static void compare_archive_worker(void *arg) {
     komparu_async_task_t *task = (komparu_async_task_t *)arg;
     const char *err = NULL;
 
-    task->dir_result = komparu_compare_archives(
-        task->source_a, task->source_b,
-        task->chunk_size,
-        task->max_decompressed_size,
-        task->max_compression_ratio,
-        task->max_entries,
-        task->max_entry_name_length,
-        &err);
+    if (task->hash_compare) {
+        task->dir_result = komparu_compare_archives_hashed(
+            task->source_a, task->source_b,
+            task->max_decompressed_size,
+            task->max_compression_ratio,
+            task->max_entries,
+            task->max_entry_name_length,
+            NULL, &err);
+    } else {
+        task->dir_result = komparu_compare_archives(
+            task->source_a, task->source_b,
+            task->chunk_size,
+            task->max_decompressed_size,
+            task->max_compression_ratio,
+            task->max_entries,
+            task->max_entry_name_length,
+            &err);
+    }
 
     if (!task->dir_result) {
         snprintf(task->error_buf, sizeof(task->error_buf),
@@ -725,6 +736,7 @@ komparu_async_task_t *komparu_async_compare_archive(
     int max_compression_ratio,
     int64_t max_entries,
     int64_t max_entry_name_length,
+    int hash_compare,
     const char **err_msg
 ) {
     komparu_pool_t *pool = get_pool();
@@ -742,6 +754,7 @@ komparu_async_task_t *komparu_async_compare_archive(
     task->max_compression_ratio = max_compression_ratio;
     task->max_entries = max_entries;
     task->max_entry_name_length = max_entry_name_length;
+    task->hash_compare = hash_compare;
 
     if (komparu_pool_submit(pool, compare_archive_worker, task) != 0) {
         *err_msg = "async pool queue full";

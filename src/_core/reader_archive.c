@@ -463,6 +463,354 @@ merge_fail:
 }
 
 /* =========================================================================
+ * FNV-1a 64-bit streaming hash
+ * ========================================================================= */
+
+#define FNV1A_64_BASIS_LO  0xcbf29ce484222325ULL
+#define FNV1A_64_BASIS_HI  0x517cc1b727220a95ULL
+#define FNV1A_64_PRIME     0x100000001b3ULL
+
+static inline uint64_t fnv1a_64_update(const void *data, size_t len, uint64_t hash) {
+    const uint8_t *p = (const uint8_t *)data;
+    for (size_t i = 0; i < len; i++) {
+        hash ^= p[i];
+        hash *= FNV1A_64_PRIME;
+    }
+    return hash;
+}
+
+/* =========================================================================
+ * Hash-based entry storage — O(entries) memory
+ * ========================================================================= */
+
+void entry_hash_list_free(entry_hash_list_t *list) {
+    if (!list) return;
+    for (size_t i = 0; i < list->count; i++) {
+        free(list->entries[i].name);
+    }
+    free(list->entries);
+    list->entries = NULL;
+    list->count = 0;
+    list->capacity = 0;
+}
+
+static int entry_hash_list_append(entry_hash_list_t *list,
+                                   const char *name,
+                                   uint64_t hash_lo,
+                                   uint64_t hash_hi,
+                                   size_t size) {
+    if (list->count >= list->capacity) {
+        size_t new_cap = list->capacity ? list->capacity * 2 : 64;
+        entry_hash_t *tmp = realloc(list->entries, new_cap * sizeof(entry_hash_t));
+        if (!tmp) return -1;
+        list->entries = tmp;
+        list->capacity = new_cap;
+    }
+    entry_hash_t *e = &list->entries[list->count];
+    e->name = strdup(name);
+    if (!e->name) return -1;
+    e->hash_lo = hash_lo;
+    e->hash_hi = hash_hi;
+    e->size = size;
+    list->count++;
+    return 0;
+}
+
+static int entry_hash_cmp(const void *a, const void *b) {
+    const entry_hash_t *ea = (const entry_hash_t *)a;
+    const entry_hash_t *eb = (const entry_hash_t *)b;
+    return strcmp(ea->name, eb->name);
+}
+
+/* =========================================================================
+ * Read all entries from an archive, computing streaming hashes
+ * ========================================================================= */
+
+int read_archive_entries_hashed(
+    const char *path,
+    entry_hash_list_t *out,
+    int64_t max_decompressed_size,
+    int max_compression_ratio,
+    int64_t max_entries,
+    int64_t max_entry_name_length,
+    const char **err_msg
+) {
+    memset(out, 0, sizeof(*out));
+
+    /* Apply defaults when limits are disabled (0 or negative) */
+    if (max_decompressed_size <= 0) max_decompressed_size = DEFAULT_MAX_DECOMPRESSED;
+    if (max_compression_ratio <= 0) max_compression_ratio = DEFAULT_MAX_RATIO;
+    if (max_entries <= 0)           max_entries = DEFAULT_MAX_ENTRIES;
+    if (max_entry_name_length <= 0) max_entry_name_length = DEFAULT_MAX_NAME_LENGTH;
+
+    struct archive *a = archive_read_new();
+    if (!a) {
+        *err_msg = "failed to create archive reader";
+        return -1;
+    }
+
+    archive_read_support_filter_all(a);
+    archive_read_support_format_all(a);
+
+    int rc = archive_read_open_filename(a, path, 65536);
+    if (rc != ARCHIVE_OK) {
+        snprintf(archive_errbuf, sizeof(archive_errbuf),
+                 "cannot open archive: %s", archive_error_string(a));
+        *err_msg = archive_errbuf;
+        archive_read_free(a);
+        return -1;
+    }
+
+    int64_t total_decompressed = 0;
+    int64_t total_compressed = 0;
+    int64_t entry_count = 0;
+
+    struct archive_entry *entry;
+    while (archive_read_next_header(a, &entry) == ARCHIVE_OK) {
+        /* Skip non-regular files (dirs, symlinks, etc.) */
+        if (archive_entry_filetype(entry) != AE_IFREG) {
+            archive_read_data_skip(a);
+            continue;
+        }
+
+        entry_count++;
+
+        /* Bomb check: max entries */
+        if (entry_count > max_entries) {
+            snprintf(archive_errbuf, sizeof(archive_errbuf),
+                     "archive bomb: too many entries (>%lld)", (long long)max_entries);
+            *err_msg = archive_errbuf;
+            goto bomb;
+        }
+
+        const char *raw_name = archive_entry_pathname(entry);
+        if (!raw_name) {
+            archive_read_data_skip(a);
+            continue;
+        }
+
+        /* Bomb check: entry name length */
+        size_t name_len = strlen(raw_name);
+        if ((int64_t)name_len > max_entry_name_length) {
+            snprintf(archive_errbuf, sizeof(archive_errbuf),
+                     "archive bomb: entry name too long (%zu > %lld)",
+                     name_len, (long long)max_entry_name_length);
+            *err_msg = archive_errbuf;
+            goto bomb;
+        }
+
+        /* Path sanitization */
+        char *safe_name = normalize_path(raw_name);
+        if (!safe_name) {
+            *err_msg = "out of memory";
+            goto fail;
+        }
+
+        if (!is_safe_path(safe_name)) {
+            free(safe_name);
+            archive_read_data_skip(a);
+            continue;  /* Skip unsafe paths silently */
+        }
+
+        /* Pre-check decompressed size from header */
+        int64_t entry_size = archive_entry_size(entry);
+        if (entry_size < 0) entry_size = 0;
+
+        if (total_decompressed + entry_size > max_decompressed_size) {
+            snprintf(archive_errbuf, sizeof(archive_errbuf),
+                     "archive bomb: decompressed size exceeds %lld bytes",
+                     (long long)max_decompressed_size);
+            *err_msg = archive_errbuf;
+            free(safe_name);
+            goto bomb;
+        }
+
+        /* Stream data blocks through hash functions */
+        uint64_t h_lo = FNV1A_64_BASIS_LO;
+        uint64_t h_hi = FNV1A_64_BASIS_HI;
+        size_t entry_data_len = 0;
+
+        const void *block;
+        size_t block_size;
+        int64_t block_offset;
+
+        int read_rc;
+        while ((read_rc = archive_read_data_block(a, &block, &block_size, &block_offset)) == ARCHIVE_OK) {
+            if (block_size == 0) continue;
+
+            /* Bomb check: running total */
+            total_decompressed += (int64_t)block_size;
+            if (total_decompressed > max_decompressed_size) {
+                snprintf(archive_errbuf, sizeof(archive_errbuf),
+                         "archive bomb: decompressed size exceeds %lld bytes",
+                         (long long)max_decompressed_size);
+                *err_msg = archive_errbuf;
+                free(safe_name);
+                goto bomb;
+            }
+
+            /* Feed block to both hash streams */
+            h_lo = fnv1a_64_update(block, block_size, h_lo);
+            h_hi = fnv1a_64_update(block, block_size, h_hi);
+            entry_data_len += block_size;
+        }
+
+        /* Check if loop ended due to error (not EOF) */
+        if (read_rc != ARCHIVE_EOF && read_rc != ARCHIVE_OK) {
+            snprintf(archive_errbuf, sizeof(archive_errbuf),
+                     "archive read error: %s", archive_error_string(a));
+            *err_msg = archive_errbuf;
+            free(safe_name);
+            goto fail;
+        }
+
+        /* Bomb check: compression ratio */
+        total_compressed = archive_filter_bytes(a, -1);
+        if (total_compressed > 0 &&
+            total_decompressed / total_compressed > max_compression_ratio) {
+            snprintf(archive_errbuf, sizeof(archive_errbuf),
+                     "archive bomb: compression ratio exceeds %d:1",
+                     max_compression_ratio);
+            *err_msg = archive_errbuf;
+            free(safe_name);
+            goto bomb;
+        }
+
+        /* Store hash entry */
+        if (entry_hash_list_append(out, safe_name, h_lo, h_hi, entry_data_len) != 0) {
+            free(safe_name);
+            *err_msg = "out of memory";
+            goto fail;
+        }
+
+        free(safe_name);
+    }
+
+    /* Sort entries by name for merge comparison */
+    if (out->count > 1) {
+        qsort(out->entries, out->count, sizeof(entry_hash_t), entry_hash_cmp);
+    }
+
+    archive_read_close(a);
+    archive_read_free(a);
+    return 0;
+
+bomb:
+fail:
+    entry_hash_list_free(out);
+    archive_read_close(a);
+    archive_read_free(a);
+    return -1;
+}
+
+/* =========================================================================
+ * Hash-based archive comparison — sorted merge of two hash lists
+ * ========================================================================= */
+
+komparu_dir_result_t *komparu_compare_archives_hashed(
+    const char *path_a,
+    const char *path_b,
+    int64_t max_decompressed_size,
+    int max_compression_ratio,
+    int64_t max_entries,
+    int64_t max_entry_name_length,
+    komparu_dir_result_t *result,
+    const char **err_msg
+) {
+    entry_hash_list_t list_a = {0};
+    entry_hash_list_t list_b = {0};
+
+    if (read_archive_entries_hashed(path_a, &list_a,
+            max_decompressed_size, max_compression_ratio,
+            max_entries, max_entry_name_length, err_msg) != 0) {
+        return NULL;
+    }
+
+    if (read_archive_entries_hashed(path_b, &list_b,
+            max_decompressed_size, max_compression_ratio,
+            max_entries, max_entry_name_length, err_msg) != 0) {
+        entry_hash_list_free(&list_a);
+        return NULL;
+    }
+
+    if (!result) {
+        result = komparu_dir_result_new();
+        if (!result) {
+            *err_msg = "out of memory";
+            entry_hash_list_free(&list_a);
+            entry_hash_list_free(&list_b);
+            return NULL;
+        }
+    }
+
+    /* Sorted merge */
+    size_t i = 0, j = 0;
+    while (i < list_a.count && j < list_b.count) {
+        int cmp = strcmp(list_a.entries[i].name, list_b.entries[j].name);
+
+        if (cmp < 0) {
+            if (komparu_dir_result_add_only_left(result, list_a.entries[i].name) != 0) {
+                *err_msg = "out of memory";
+                goto merge_fail;
+            }
+            i++;
+        } else if (cmp > 0) {
+            if (komparu_dir_result_add_only_right(result, list_b.entries[j].name) != 0) {
+                *err_msg = "out of memory";
+                goto merge_fail;
+            }
+            j++;
+        } else {
+            /* Same entry name — compare size + hash */
+            entry_hash_t *ea = &list_a.entries[i];
+            entry_hash_t *eb = &list_b.entries[j];
+
+            if (ea->size != eb->size) {
+                if (komparu_dir_result_add_diff(result, ea->name, KOMPARU_DIFF_SIZE) != 0) {
+                    *err_msg = "out of memory";
+                    goto merge_fail;
+                }
+            } else if (ea->hash_lo != eb->hash_lo || ea->hash_hi != eb->hash_hi) {
+                if (komparu_dir_result_add_diff(result, ea->name, KOMPARU_DIFF_CONTENT) != 0) {
+                    *err_msg = "out of memory";
+                    goto merge_fail;
+                }
+            }
+            /* else: size and both hashes match — entries are identical */
+
+            i++;
+            j++;
+        }
+    }
+
+    while (i < list_a.count) {
+        if (komparu_dir_result_add_only_left(result, list_a.entries[i].name) != 0) {
+            *err_msg = "out of memory";
+            goto merge_fail;
+        }
+        i++;
+    }
+
+    while (j < list_b.count) {
+        if (komparu_dir_result_add_only_right(result, list_b.entries[j].name) != 0) {
+            *err_msg = "out of memory";
+            goto merge_fail;
+        }
+        j++;
+    }
+
+    entry_hash_list_free(&list_a);
+    entry_hash_list_free(&list_b);
+    return result;
+
+merge_fail:
+    entry_hash_list_free(&list_a);
+    entry_hash_list_free(&list_b);
+    komparu_dir_result_free(result);
+    return NULL;
+}
+
+/* =========================================================================
  * Iterator API (for future use / streaming access)
  * ========================================================================= */
 

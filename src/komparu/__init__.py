@@ -146,6 +146,7 @@ def compare_archive(
     max_compression_ratio: int = 200,
     max_archive_entries: int = 100_000,
     max_entry_name_length: int = 4096,
+    hash_compare: bool = False,
 ) -> DirResult:
     """Compare two archive files entry-by-entry.
 
@@ -156,6 +157,9 @@ def compare_archive(
     :param max_compression_ratio: Max compression ratio (bomb limit).
     :param max_archive_entries: Max number of archive entries (bomb limit).
     :param max_entry_name_length: Max entry path length (bomb limit).
+    :param hash_compare: Use hash-based comparison (O(entries) memory instead
+        of O(total_decompressed)). Computes streaming FNV-1a 128-bit fingerprint
+        of each entry instead of storing full content.
     :returns: DirResult with equal, diff, only_left, only_right.
     """
     raw = _compare_archive_c(
@@ -165,6 +169,7 @@ def compare_archive(
         max_compression_ratio=max_compression_ratio,
         max_entries=max_archive_entries,
         max_entry_name_length=max_entry_name_length,
+        hash_compare=hash_compare,
     )
     return _build_dir_result(raw)
 

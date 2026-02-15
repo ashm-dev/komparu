@@ -14,12 +14,31 @@ struct komparu_dir_result;
 typedef struct komparu_dir_result komparu_dir_result_t;
 
 /**
+ * Arena block for contiguous string storage.
+ * Strings are packed sequentially into 64KB blocks, eliminating
+ * per-allocation malloc overhead (~16 bytes/alloc).
+ */
+typedef struct komparu_arena_block {
+    struct komparu_arena_block *next;
+    size_t used;
+    size_t capacity;
+    char data[];  /* flexible array member */
+} komparu_arena_block_t;
+
+typedef struct {
+    komparu_arena_block_t *head;    /* first block */
+    komparu_arena_block_t *current; /* current block for allocation */
+} komparu_arena_t;
+
+/**
  * Directory entry list — dynamic array of relative paths.
+ * Path strings live in the arena; only the pointer array is malloc'd.
  */
 typedef struct {
-    char **paths;       /* Array of malloc'd path strings */
+    char **paths;       /* Array of pointers (into arena) */
     size_t count;       /* Number of entries */
     size_t capacity;    /* Allocated capacity */
+    komparu_arena_t arena;
 } komparu_pathlist_t;
 
 /**

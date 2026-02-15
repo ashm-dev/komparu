@@ -58,6 +58,7 @@ set(KOMPARU_CORE_SOURCES
     src/_core/compare.c
     src/_core/reader_file.c
     src/_core/reader_http.c
+    src/_core/curl_share.c
     src/_core/reader_archive.c
     src/_core/dirwalk.c
     src/_core/pool.c
