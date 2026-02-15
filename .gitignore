@@ -11,8 +11,4 @@ build_*/
 .pytest_cache/
 *.egg
 .eggs/
-benchmarks/competitors/compare_go
-benchmarks/competitors/compare_rs
-benchmarks/STATE.md
-docs/en/workplan.md
-docs/ru/workplan.md
+.github/
