@@ -2,6 +2,8 @@
 
 # komparu
 
+> **komparu** \[komˈpa.ru\] — Esperanto imperative of *kompari* (to compare). Literally: "compare!" The name captures the library's essence in a single word.
+
 Ultra-fast file comparison library with a C23 core. Compares local files, directories, archives, and HTTP resources byte-by-byte using memory-mapped I/O, vectorized operations, and a native thread pool.
 
 ## Features
