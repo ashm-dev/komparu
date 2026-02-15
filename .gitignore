@@ -13,3 +13,6 @@ build_*/
 .eggs/
 benchmarks/competitors/compare_go
 benchmarks/competitors/compare_rs
+benchmarks/STATE.md
+docs/en/workplan.md
+docs/ru/workplan.md

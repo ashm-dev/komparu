@@ -229,7 +229,6 @@ See [`benchmarks/README.md`](benchmarks/README.md) for methodology details.
 - [Requirements](docs/en/requirements.md)
 - [Security](docs/en/security.md)
 - [Edge Cases](docs/en/edge-cases.md)
-- [Workplan](docs/en/workplan.md)
 
 ## Architecture
 

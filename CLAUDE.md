@@ -59,12 +59,14 @@ docs/ru/              Russian documentation
 
 Key C files:
 - `module.c` — CPython C API wrappers
-- `compare.c` — core comparison (mmap + MADV_SEQUENTIAL)
-- `compare_dir.c` — directory comparison (pthread pool)
-- `compare_archive.c` — archive comparison (libarchive)
-- `http_reader.c` — HTTP comparison (libcurl)
+- `compare.c` — core comparison engine (mmap + MADV_SEQUENTIAL, quick_check)
+- `reader_file.c` — local file reader (mmap)
+- `reader_http.c` — HTTP reader (libcurl, Range requests)
+- `reader_archive.c` — archive reader (libarchive streaming)
+- `dirwalk.c` — recursive directory traversal
+- `pool.c` — pthread thread pool
 - `async_task.c` — async task infrastructure (eventfd/pipe, CAS lifecycle)
-- `quick_check.c` — quick check (first/last/middle byte sampling)
+- `async_curl.c` — libcurl multi building blocks
 
 Key Python files:
 - `__init__.py` — public API exports
@@ -99,10 +101,9 @@ Key Python files:
 
 All documentation is bilingual (English + Russian):
 - `README.md` / `README.ru.md` — project README with language selector
-- `docs/en/` — English docs (api, architecture, requirements, security, edge-cases, workplan)
+- `docs/en/` — English docs (api, architecture, requirements, security, edge-cases)
 - `docs/ru/` — Russian docs (same structure)
 - `benchmarks/README.md` — benchmark methodology
-- `benchmarks/STATE.md` — project state dump for agent continuity
 
 When modifying documentation, update both English and Russian versions.
 

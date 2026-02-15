@@ -222,6 +222,14 @@ python run_all.py          # ~30 мин полный прогон
 
 Методология описана в [`benchmarks/README.md`](benchmarks/README.md).
 
+## Документация
+
+- [API-справочник](docs/ru/api.md)
+- [Архитектура](docs/ru/architecture.md)
+- [Требования](docs/ru/requirements.md)
+- [Безопасность](docs/ru/security.md)
+- [Краевые случаи](docs/ru/edge-cases.md)
+
 ## Архитектура
 
 Ядро на C23 с Python-биндингами через CPython C API:
@@ -232,15 +240,6 @@ python run_all.py          # ~30 мин полный прогон
 - **libcurl** для HTTP с пулом соединений
 - **libarchive** для поддержки форматов архивов
 - **CAS-based жизненный цикл задач** для безопасной асинхронной отмены
-
-## Документация
-
-- [API-справочник](docs/ru/api.md)
-- [Архитектура](docs/ru/architecture.md)
-- [Требования](docs/ru/requirements.md)
-- [Безопасность](docs/ru/security.md)
-- [Краевые случаи](docs/ru/edge-cases.md)
-- [План работ](docs/ru/workplan.md)
 
 ## Лицензия
 
