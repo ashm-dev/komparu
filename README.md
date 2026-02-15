@@ -11,6 +11,8 @@ Ultra-fast file comparison library with a C23 core. Compares local files, direct
 - **Size precheck** — skips content comparison when file sizes differ
 - **Parallel directory comparison** — native pthread pool, configurable worker count
 - **Archive comparison** — entry-by-entry comparison of tar/zip/gz/bz2/xz via libarchive
+- **Hash-based archive mode** — `hash_compare=True` for O(entries) memory via streaming FNV-1a 128-bit
+- **Connection pooling** — CURLSH shared DNS/connection/TLS cache across all HTTP requests
 - **HTTP comparison** — compare local files against remote URLs via libcurl
 - **Async API** — `komparu.aio` with C thread pool + eventfd, zero `asyncio.to_thread()` overhead
 - **Archive bomb protection** — configurable size/ratio/entry limits

@@ -151,6 +151,7 @@ result = komparu.compare_archive("backup_v1.tar.gz", "backup_v2.zip")
 | `max_compression_ratio` | `int` | `200` | Max compression ratio |
 | `max_archive_entries` | `int` | `100000` | Max number of entries |
 | `max_entry_name_length` | `int` | `4096` | Max entry path length |
+| `hash_compare` | `bool` | `False` | Use hash-based comparison (streaming FNV-1a 128-bit). O(entries) memory instead of O(total_decompressed). |
 
 ### komparu.compare_all(sources, **options) -> bool
 

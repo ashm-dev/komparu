@@ -31,6 +31,8 @@ komparu/
 │       ├── async_task.h
 │       ├── async_curl.c          # libcurl multi building blocks
 │       ├── async_curl.h
+│       ├── curl_share.c          # CURLSH connection/DNS/TLS sharing
+│       ├── curl_share.h
 │       └── compat.h              # Python version / platform compat macros
 ├── tests/
 │   ├── conftest.py
@@ -41,7 +43,7 @@ komparu/
 │   ├── test_parallel.py
 │   ├── test_async.py
 │   └── test_config.py
-├── benchmarks/                   # (empty, planned)
+├── benchmarks/                   # Benchmark suite (Go/Rust competitors, charts)
 ├── docs/
 │   ├── en/
 │   └── ru/
@@ -75,7 +77,7 @@ komparu/
 │  ┌───────────────┐ ┌──────────────┐ ┌───────────┐│
 │  │reader_file.c  │ │reader_http.c │ │reader_    ││
 │  │mmap / read()  │ │libcurl       │ │archive.c  ││
-│  │               │ │Range requests│ │libarchive ││
+│  │               │ │+ curl_share  │ │libarchive ││
 │  └───────────────┘ └──────────────┘ └───────────┘│
 └──────────────────────────────────────────────────┘
 ```
@@ -105,7 +107,7 @@ typedef struct komparu_reader {
 | Reader | Backend | Chunk Strategy |
 |--------|---------|----------------|
 | `reader_file` | `mmap` (Linux/macOS), `ReadFile` (Windows) | Memory-mapped pages, OS manages caching |
-| `reader_http` | libcurl | HTTP Range requests, connection reuse |
+| `reader_http` | libcurl | HTTP Range requests, CURLSH connection/DNS/TLS pooling |
 | `reader_archive` | libarchive | Sequential streaming read |
 
 ## 4. Comparison Algorithm
@@ -129,6 +131,26 @@ Key properties:
 - I/O: stops at first difference
 - Network: only fetches needed chunks via Range
 
+### Quick Check (early exit optimization)
+
+Before full sequential scan, `komparu_quick_check` samples up to 5 offsets in O(1):
+
+```
+quick_check(reader_a, reader_b, chunk_size):
+    offsets = [0, EOF-chunk, 25%, 50%, 75%]
+    for each offset:
+        seek both readers
+        read one chunk each
+        if memcmp differs → return DIFFERENT
+    return EQUAL (proceed to full scan for confirmation)
+```
+
+Catches common difference patterns (truncation, appended data, localized edits) without reading the full file. Uses thread-local buffers to avoid per-call malloc overhead.
+
+### Thread-Local Comparison Buffers
+
+Both `komparu_compare` and `komparu_quick_check` use `_Thread_local` static buffers instead of heap allocation. This eliminates malloc/free overhead on every comparison call while remaining thread-safe for the parallel thread pool.
+
 ## 5. Directory Comparison
 
 ```
@@ -143,6 +165,10 @@ compare_dir(dir_a, dir_b):
              diff[file] = CONTENT_MISMATCH
     4. return DirResult(equal, diff, only_left, only_right)
 ```
+
+### Arena Allocator for Path Strings
+
+`dirwalk.c` stores all path strings in a contiguous arena (64 KB blocks). The `pathlist_t` array holds pointers into arena memory. This eliminates per-path `malloc` overhead (~16 bytes/alloc) and enables bulk deallocation — a single `arena_free()` instead of thousands of individual `free()` calls.
 
 ## 6. Thread Pool
 
@@ -258,3 +284,32 @@ No Python HTTP/IO dependencies. All I/O handled in C via libcurl easy and mmap.
 | Archive reader | libarchive | libarchive | libarchive |
 | Thread pool | pthreads | pthreads | Windows threads |
 | Free-threading | Yes (3.13t+) | Yes (3.13t+) | Yes (3.13t+) |
+
+## 11. Performance Optimizations
+
+### CURLSH Connection Pooling
+
+`curl_share.c` provides a global `CURLSH*` handle shared by all libcurl easy handles. Shares:
+- **DNS cache** — avoids repeated lookups to the same host
+- **Connection pool** — reuses TCP/TLS connections across requests
+- **TLS session cache** — TLS session resumption, skips full handshake
+
+Thread safety: per-lock-data mutex array (8 mutexes indexed by `curl_lock_data`), allowing maximum concurrency (different data types locked independently). POSIX: `pthread_mutex_t`, Windows: `SRWLOCK`.
+
+Initialized once in `PyInit__core`, cleaned up via `Py_AtExit`.
+
+### Hash-Based Archive Comparison
+
+`compare_archive(hash_compare=True)` computes a streaming FNV-1a 128-bit fingerprint (two 64-bit hashes with different initial bases) of each archive entry. Stores only `name + hash_lo + hash_hi + size` per entry (~40 bytes).
+
+Memory: **O(entries)** instead of **O(total_decompressed)**. For 100,000 entries: ~4 MB vs potentially 50+ GB with the default full-content mode.
+
+Collision probability: ~2^{-64} under birthday attack (128-bit fingerprint from two independent hash streams).
+
+### Arena Allocator for Directory Traversal
+
+`dirwalk.c` allocates path strings in contiguous 64 KB arena blocks instead of individual `malloc` calls. Reduces allocation overhead by ~16 bytes per path and enables O(1) bulk deallocation.
+
+### Thread-Local Comparison Buffers
+
+`compare.c` uses `_Thread_local` static buffers for both `komparu_compare` and `komparu_quick_check`. Eliminates per-call `malloc`/`free` while remaining safe in the parallel thread pool.

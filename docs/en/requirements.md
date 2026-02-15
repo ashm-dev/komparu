@@ -110,7 +110,7 @@ Limits:
 - `max_compression_ratio` — max ratio decompressed/compressed (default: 200)
 - `max_archive_entries` — max files per archive (default: 100,000)
 - `max_entry_name_length` — max entry path length (default: 4096 bytes)
-- `comparison_timeout` — wall-clock time per comparison call (default: 300s)
+- `comparison_timeout` — wall-clock time per comparison call (default: 300s) *[planned — not yet enforced in C]*
 
 Hard rules (always on):
 - Streaming only — never extract to disk

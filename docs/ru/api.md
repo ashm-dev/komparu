@@ -151,6 +151,7 @@ result = komparu.compare_archive("backup_v1.tar.gz", "backup_v2.zip")
 | `max_compression_ratio` | `int` | `200` | Макс. степень сжатия |
 | `max_archive_entries` | `int` | `100000` | Макс. количество записей |
 | `max_entry_name_length` | `int` | `4096` | Макс. длина пути записи |
+| `hash_compare` | `bool` | `False` | Хеш-сравнение (потоковый FNV-1a 128-бит). O(entries) по памяти вместо O(total_decompressed). |
 
 ### komparu.compare_all(sources, **options) -> bool
 

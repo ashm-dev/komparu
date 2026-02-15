@@ -67,6 +67,7 @@ Key C files:
 - `pool.c` — pthread thread pool
 - `async_task.c` — async task infrastructure (eventfd/pipe, CAS lifecycle)
 - `async_curl.c` — libcurl multi building blocks
+- `curl_share.c` — CURLSH connection/DNS/TLS session sharing
 
 Key Python files:
 - `__init__.py` — public API exports
@@ -115,6 +116,9 @@ When modifying documentation, update both English and Russian versions.
 4. **pthread pool** — native threads for parallel comparison
 5. **eventfd/pipe + asyncio.loop.add_reader()** — native async without Python threads
 6. **CAS-based task lifecycle** — RUNNING -> DONE or RUNNING -> ORPHANED for safe cancellation
-7. **libcurl** for HTTP with connection pooling
+7. **libcurl** for HTTP with CURLSH connection/DNS/TLS pooling
 8. **libarchive** for archive format support
 9. **Archive bomb protection** — configurable size/ratio/entry limits
+10. **Hash-based archive comparison** — streaming FNV-1a 128-bit for O(entries) memory
+11. **Arena allocator** — 64KB block arena for dirwalk path strings
+12. **Thread-local compare buffers** — avoid per-call malloc in compare/quick_check
