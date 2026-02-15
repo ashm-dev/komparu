@@ -77,7 +77,14 @@ def compare(
     path_a = source_a.url if isinstance(source_a, Source) else source_a
     path_b = source_b.url if isinstance(source_b, Source) else source_b
 
-    h = headers if headers is not None else (cfg.headers or None)
+    global_h = headers if headers is not None else (cfg.headers or None)
+    # Per-source headers override global headers (Source.headers wins)
+    h_a = _resolve_headers(source_a, global_h)
+    h_b = _resolve_headers(source_b, global_h)
+    # Use merged headers if both sources have the same resolved headers,
+    # otherwise use the first non-None set (C API takes a single headers dict)
+    h = h_a or h_b or global_h
+
     p = proxy if proxy is not None else cfg.proxy
 
     return _compare_c(

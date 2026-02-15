@@ -45,6 +45,14 @@ static int ensure_buffers(size_t chunk_size, void **a, void **b) {
     return 0;
 }
 
+void komparu_compare_tls_cleanup(void) {
+    free(tl_buf_a);
+    free(tl_buf_b);
+    tl_buf_a = NULL;
+    tl_buf_b = NULL;
+    tl_buf_cap = 0;
+}
+
 komparu_result_t komparu_compare(
     komparu_reader_t *reader_a,
     komparu_reader_t *reader_b,

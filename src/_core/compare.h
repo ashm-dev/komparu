@@ -51,6 +51,13 @@ komparu_result_t komparu_quick_check(
     const char **err_msg
 );
 
+/**
+ * Free thread-local comparison buffers.
+ * Call from worker threads before exit to prevent leaks.
+ * Safe to call even if buffers were never allocated.
+ */
+void komparu_compare_tls_cleanup(void);
+
 /* =========================================================================
  * Directory / archive comparison result
  * ========================================================================= */

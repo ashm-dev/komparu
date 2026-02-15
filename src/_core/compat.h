@@ -129,6 +129,25 @@ static inline size_t komparu_cpu_count(void) {
     #define strcasecmp  _stricmp
 #endif
 
+/* =========================================================================
+ * Portable strerror — avoids GNU vs POSIX strerror_r ambiguity
+ * ========================================================================= */
+
+#include <errno.h>
+#include <string.h>
+#include <stdio.h>
+
+static inline void komparu_strerror(int errnum, char *buf, size_t buflen) {
+#ifdef KOMPARU_WINDOWS
+    strerror_s(buf, buflen, errnum);
+#else
+    /* For known errno values, strerror() returns a static string pointer.
+     * We immediately copy into our thread-local buffer, so this is safe. */
+    const char *msg = strerror(errnum);
+    snprintf(buf, buflen, "%s", msg ? msg : "unknown error");
+#endif
+}
+
 /* Default chunk size: 64 KB */
 #define KOMPARU_DEFAULT_CHUNK_SIZE  (64 * 1024)
 

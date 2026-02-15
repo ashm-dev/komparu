@@ -12,6 +12,7 @@
  */
 
 #include "pool.h"
+#include "compare.h"
 #include <stdlib.h>
 #include <string.h>
 #ifdef KOMPARU_WINDOWS
@@ -110,6 +111,7 @@ static void *worker_fn(void *arg) {
 
         if (pool->shutdown && pool->queue_count == 0) {
             POOL_UNLOCK(pool);
+            komparu_compare_tls_cleanup();
 #ifdef KOMPARU_WINDOWS
             return 0;
 #else

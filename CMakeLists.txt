@@ -100,8 +100,9 @@ endif()
 # =============================================================================
 # 4.5. Performance Optimizations
 #
-# This library builds from source on each user's machine, so -march=native
-# is safe and correct — it optimizes for the exact CPU the build runs on.
+# -march=native is only used for local source builds (pip install -e .).
+# When building wheels via cibuildwheel, we skip it to produce portable
+# binaries that run on any CPU of the target architecture.
 # Sanitizer builds skip aggressive opts to preserve diagnostic accuracy.
 # =============================================================================
 
@@ -110,18 +111,8 @@ if(NOT KOMPARU_SANITIZER)
         target_compile_options(_core PRIVATE /O2 /Ob3 /GL /Gw /Gy)
         target_link_options(_core PRIVATE /LTCG /OPT:REF /OPT:ICF)
     else()
-        # -O3:                 max optimization (vectorization, unrolling, inlining)
-        # -march=native:       tune for the build host's CPU (AVX2, SSE4.2, etc.)
-        # -mtune=native:       schedule instructions for the build host
-        # -fomit-frame-pointer: free up a register
-        # -funroll-loops:      unroll small loops
-        # -fstrict-aliasing:   enable type-based alias analysis
-        # -fno-semantic-interposition: better optimization for shared objects
-        # -pipe:               use pipes between compiler stages
         target_compile_options(_core PRIVATE
             -O3
-            -march=native
-            -mtune=native
             -fomit-frame-pointer
             -funroll-loops
             -fstrict-aliasing
@@ -129,6 +120,14 @@ if(NOT KOMPARU_SANITIZER)
             -pipe
             -DNDEBUG
         )
+
+        # -march=native + -mtune=native only for local builds, not wheels
+        if(NOT DEFINED ENV{CIBUILDWHEEL})
+            target_compile_options(_core PRIVATE
+                -march=native
+                -mtune=native
+            )
+        endif()
 
         # LTO: -flto=full for clang (whole-module), -flto for gcc
         if(CMAKE_C_COMPILER_ID STREQUAL "Clang" OR CMAKE_C_COMPILER_ID STREQUAL "AppleClang")
@@ -168,13 +167,8 @@ else()
     )
 endif()
 
-if(APPLE)
-    # macOS: use kqueue for async file I/O
-    target_compile_definitions(_core PRIVATE KOMPARU_USE_KQUEUE=1)
-elseif(UNIX AND NOT APPLE)
-    # Linux: use io_uring for async file I/O (if available)
-    target_compile_definitions(_core PRIVATE KOMPARU_USE_IO_URING=1)
-endif()
+# NOTE: io_uring (Linux) and kqueue (macOS) defines removed — not used by
+# current async implementation (C thread pool + eventfd/pipe model).
 
 # =============================================================================
 # 6. Sanitizers (opt-in via -DKOMPARU_SANITIZER=address|undefined|thread|memory)

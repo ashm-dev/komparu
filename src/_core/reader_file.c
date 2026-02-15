@@ -140,7 +140,10 @@ static void file_close_mmap(komparu_reader_t *self) {
 
 static int64_t file_read_fallback(komparu_reader_t *self, void *buf, size_t size) {
     file_ctx_t *ctx = (file_ctx_t *)self->ctx;
-    ssize_t n = read(ctx->fd, buf, size);
+    ssize_t n;
+    do {
+        n = read(ctx->fd, buf, size);
+    } while (n < 0 && errno == EINTR);
     if (n < 0) {
         return -1;
     }
@@ -172,14 +175,14 @@ static void file_close_fallback(komparu_reader_t *self) {
 komparu_reader_t *komparu_reader_file_open(const char *path, const char **err_msg) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
-        strerror_r(errno, komparu_errbuf, sizeof(komparu_errbuf));
+        komparu_strerror(errno, komparu_errbuf, sizeof(komparu_errbuf));
         *err_msg = komparu_errbuf;
         return NULL;
     }
 
     struct stat st;
     if (fstat(fd, &st) != 0) {
-        strerror_r(errno, komparu_errbuf, sizeof(komparu_errbuf));
+        komparu_strerror(errno, komparu_errbuf, sizeof(komparu_errbuf));
         *err_msg = komparu_errbuf;
         close(fd);
         return NULL;
