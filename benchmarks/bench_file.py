@@ -2,7 +2,7 @@
 """Single file comparison benchmarks.
 
 Compares: komparu, filecmp, hashlib (SHA-256), cmp -s, diff -q, Go, Rust.
-Scenarios: identical, differ-first-byte, differ-last-byte.
+Scenarios: identical, differ-first-byte, differ-last-byte, differ-at-25%.
 Sizes: 1MB, 10MB, 100MB, 1GB.
 
 Statistical methodology:

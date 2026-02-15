@@ -24,8 +24,6 @@ class KomparuConfig:
 
     # HTTP
     headers: dict[str, str] = field(default_factory=dict)
-    retries: int = 0
-    retry_backoff: float = 1.0
 
     # Archive safety limits
     max_decompressed_size: int | None = 1 * 1024**3       # 1 GB
@@ -55,8 +53,6 @@ def configure(**kwargs) -> None:
     :param size_precheck: Compare sizes before content.
     :param quick_check: Sample first/last/middle before full scan.
     :param headers: Global HTTP headers.
-    :param retries: HTTP retry count (default 0).
-    :param retry_backoff: Retry backoff base (seconds).
     :param max_decompressed_size: Max decompressed bytes per archive (None = no limit).
     :param max_compression_ratio: Max compression ratio (None = no limit).
     :param max_archive_entries: Max files per archive (None = no limit).

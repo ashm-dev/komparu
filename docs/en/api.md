@@ -100,10 +100,6 @@ komparu.compare("file_a", "file_b", chunk_size=131072)  # 128 KB
 | `follow_redirects` | `bool` | `True` | Follow HTTP redirects |
 | `verify_ssl` | `bool` | `True` | Verify SSL certificates |
 | `quick_check` | `bool` | `True` | Sample first/last/middle chunks before full comparison (seekable sources only) |
-| `min_size` | `int \| None` | `None` | Reject source if smaller than this (bytes). Opt-in. |
-| `integrity_check` | `bool` | `True` | Check local file mtime before/after comparison |
-| `retries` | `int` | `0` | HTTP retry count. Disabled by default — opt-in to avoid worsening rate limits. |
-| `retry_backoff` | `float` | `1.0` | Base backoff between retries (seconds, exponential) |
 
 **Priority:** `Source()` fields > function parameters > `komparu.configure()` defaults.
 
@@ -122,14 +118,17 @@ else:
     print("Content differs:", result.diff)
 ```
 
-**Parameters:** same as `compare()` plus:
+**Parameters:**
 
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
 | `dir_a` | `str` | required | First directory path |
 | `dir_b` | `str` | required | Second directory path |
-| `max_workers` | `int` | `min(cpu, 8)` | Parallel workers |
+| `chunk_size` | `int` | `65536` | Chunk size in bytes |
+| `size_precheck` | `bool` | `True` | Compare sizes before content |
+| `quick_check` | `bool` | `True` | Sample first/last/middle before full scan |
 | `follow_symlinks` | `bool` | `True` | Follow symbolic links |
+| `max_workers` | `int` | `0` (auto) | Thread pool size (0=auto, 1=sequential) |
 
 ### komparu.compare_archive(archive_a, archive_b, **options) -> DirResult
 
@@ -139,7 +138,17 @@ Compare two archives as virtual directories.
 result = komparu.compare_archive("backup_v1.tar.gz", "backup_v2.zip")
 ```
 
-**Parameters:** same as `compare_dir()`.
+**Parameters:**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `archive_a` | `str` | required | First archive path |
+| `archive_b` | `str` | required | Second archive path |
+| `chunk_size` | `int` | `65536` | Chunk size in bytes |
+| `max_decompressed_size` | `int` | `1 GB` | Max total decompressed bytes |
+| `max_compression_ratio` | `int` | `200` | Max compression ratio |
+| `max_archive_entries` | `int` | `100000` | Max number of entries |
+| `max_entry_name_length` | `int` | `4096` | Max entry path length |
 
 ### komparu.compare_all(sources, **options) -> bool
 
@@ -239,7 +248,7 @@ class DiffReason(str, Enum):
 komparu.configure(
     # I/O
     chunk_size=65536,
-    max_workers=4,
+    max_workers=0,
     timeout=30.0,
     follow_redirects=True,
     verify_ssl=True,

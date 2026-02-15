@@ -65,10 +65,6 @@ def compare(
     timeout: float | None = None,
     follow_redirects: bool | None = None,
     verify_ssl: bool | None = None,
-    retries: int | None = None,
-    retry_backoff: float | None = None,
-    min_size: int | None = None,
-    integrity_check: bool = True,
 ) -> bool:
     """Compare two sources byte-by-byte.
 
@@ -81,10 +77,6 @@ def compare(
     :param timeout: HTTP timeout in seconds.
     :param follow_redirects: Follow HTTP redirects.
     :param verify_ssl: Verify SSL certificates.
-    :param retries: HTTP retry count.
-    :param retry_backoff: Retry backoff base (seconds).
-    :param min_size: Reject source if smaller than this.
-    :param integrity_check: Check file mtime before/after comparison.
     :returns: True if sources are byte-identical.
     """
     cfg = get_config()

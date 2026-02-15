@@ -24,7 +24,6 @@ class TestConfigure:
         assert cfg.follow_redirects is True
         assert cfg.verify_ssl is True
         assert cfg.size_precheck is True
-        assert cfg.retries == 0
         assert cfg.max_decompressed_size == 1 * 1024**3
         assert cfg.max_compression_ratio == 200
         assert cfg.max_archive_entries == 100_000

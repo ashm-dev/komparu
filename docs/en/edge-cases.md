@@ -1,7 +1,8 @@
 # komparu — Complete Edge Cases Registry
 
 Three-pass analysis. Every case has a status:
-- **HANDLE** — must be handled in code
+- **HANDLE** — handled in code
+- **PLANNED** — planned for future implementation
 - **DETECT** — detect and report clearly (error/warning)
 - **DOCUMENT** — expected behavior, document for users
 - **N/A** — not applicable to our design
@@ -12,9 +13,9 @@ Three-pass analysis. Every case has a status:
 
 | # | Case | Status | Behavior |
 |---|------|--------|----------|
-| 1 | Both files 0 bytes | DOCUMENT | `True`. Empty equals empty. `min_size` opt-in for stricter checks. |
+| 1 | Both files 0 bytes | DOCUMENT | `True`. Empty equals empty. |
 | 2 | One file 0 bytes, other not | HANDLE | Size pre-check → instant `False`. |
-| 3 | Same file path (`compare("/a", "/a")`) | HANDLE | Detect via `(dev, ino)` → instant `True`, no I/O. |
+| 3 | Same file path (`compare("/a", "/a")`) | PLANNED | Detect via `(dev, ino)` → instant `True`, no I/O. |
 | 4 | Same URL string | DOCUMENT | **No shortcut.** Same URL can return different content (dynamic, CDN nodes, cache). Always compare. Only local files get inode-based shortcut. |
 | 4a | URL with different query params | DOCUMENT | Different resources. `?v=1` ≠ `?v=2`. No normalization of query params. |
 | 5 | Source doesn't exist (local) | HANDLE | `SourceNotFoundError` with path. |
@@ -31,7 +32,7 @@ Three-pass analysis. Every case has a status:
 | 16 | Trailing slashes in path | HANDLE | Normalize: strip trailing slashes for files. |
 | 17 | File on NFS/SMB (network filesystem) | DOCUMENT | Works normally. Performance depends on network. `mmap` may behave differently. |
 | 18 | File on read-only filesystem | DOCUMENT | Read-only is fine — we only read. |
-| 19 | Hard links (same inode, different paths) | HANDLE | Detected by case #3 (`dev, ino` match) → instant `True`. |
+| 19 | Hard links (same inode, different paths) | PLANNED | Detect via `(dev, ino)` match → instant `True`. Depends on #3. |
 | 20 | `str` vs `bytes` path in Python | HANDLE | Accept both. Encode `str` via `os.fsencode()`. |
 | 21 | Path with null byte | HANDLE | Reject: `ConfigError("path contains null byte")`. |
 
@@ -47,9 +48,9 @@ Three-pass analysis. Every case has a status:
 | 26 | HTTP 403 Forbidden | HANDLE | `SourceReadError("HTTP 403 for 'url'")`. |
 | 27 | HTTP 404 Not Found | HANDLE | `SourceNotFoundError("HTTP 404 for 'url'")`. |
 | 28 | HTTP 429 Too Many Requests | HANDLE | `SourceReadError` with status code. **No auto-retry** — user's server may have strict rate limits, retries would make it worse. User opts-in to retries explicitly. |
-| 29 | HTTP 5xx server errors | HANDLE | `SourceReadError` with status code. Retry only if `retries > 0` (default: `0`, disabled). |
-| 30 | Connection timeout | HANDLE | `SourceReadError`. Retry only if `retries > 0`. |
-| 31 | Connection reset mid-transfer | HANDLE | `SourceReadError`. Retry only if `retries > 0`. Can resume from last chunk position if server supports Range. |
+| 29 | HTTP 5xx server errors | HANDLE | `SourceReadError` with status code. No auto-retry. |
+| 30 | Connection timeout | HANDLE | `SourceReadError`. No auto-retry. |
+| 31 | Connection reset mid-transfer | HANDLE | `SourceReadError`. No auto-retry. |
 | 32 | DNS resolution failure | HANDLE | `SourceReadError("DNS resolution failed for 'host'")`. |
 | 33 | SSL certificate invalid/expired | HANDLE | Error by default. `verify_ssl=False` to skip. |
 | 34 | Self-signed certificate | HANDLE | Same as #33. |
@@ -57,10 +58,10 @@ Three-pass analysis. Every case has a status:
 | 36 | `Transfer-Encoding: chunked` | HANDLE | libcurl handles transparently. |
 | 37 | `Content-Length` header lies (smaller or larger than body) | HANDLE | Size pre-check is advisory. Chunk comparison catches actual EOF mismatch. |
 | 38 | No `Content-Length` header | HANDLE | Skip size pre-check for this source. Chunk comparison works without it. |
-| 39 | Server returns wrong bytes for Range request | HANDLE | Verify `Content-Range` response header matches request. Mismatch → `SourceReadError`. |
+| 39 | Server returns wrong bytes for Range request | PLANNED | Verify `Content-Range` response header matches request. Mismatch → `SourceReadError`. |
 | 40 | Presigned URL expires mid-comparison | DETECT | HTTP 403 mid-stream → `SourceReadError` with context. Document: use sufficient TTL. |
 | 41 | Very slow server (trickle: 1 byte/sec) | HANDLE | `timeout` covers per-request time. `comparison_timeout` covers total wall-clock. |
-| 42 | Server hangs (no response at all) | HANDLE | `timeout` → retry → `SourceReadError`. |
+| 42 | Server hangs (no response at all) | HANDLE | `timeout` → `SourceReadError`. |
 | 43 | Server closes connection after N requests | HANDLE | libcurl reconnects automatically. Connection pooling handles this. |
 | 44 | CDN returns different content from different edge nodes | DOCUMENT | Not detectable at our level. User responsibility. Can be mitigated with `quick_check=False` and pinning DNS, but outside our scope. |
 | 45 | Content varies by User-Agent or Referer | DOCUMENT | User sets custom `headers` if needed. We don't set User-Agent by default (libcurl default). |
@@ -77,8 +78,8 @@ Three-pass analysis. Every case has a status:
 | 55 | `file://` URLs | HANDLE | Treat as local file path. Strip scheme, use file reader. |
 | 56 | `ftp://`, `data:`, `ws://` URLs | HANDLE | `ConfigError("unsupported URL scheme 'ftp'")`. Only `http`, `https`, `file` supported. |
 | 57 | HTTP/2 vs HTTP/1.1 | HANDLE | libcurl negotiates automatically. No special handling. |
-| 58 | Server returns 0 bytes with 200 OK | DOCUMENT | Treated as empty file. See case #1. `min_size` opt-in for protection. |
-| 59 | ETag changes between Range requests (content changed on server) | HANDLE | Store ETag from first request. Verify on subsequent requests. Mismatch → `SourceReadError("source content changed during comparison")`. |
+| 58 | Server returns 0 bytes with 200 OK | DOCUMENT | Treated as empty file. See case #1. |
+| 59 | ETag changes between Range requests (content changed on server) | PLANNED | Store ETag from first request. Verify on subsequent requests. Mismatch → `SourceReadError("source content changed during comparison")`. |
 | 60a | Server only serves whole files (no Range, no HEAD) | HANDLE | Detect on first request (200 instead of 206). Switch to full sequential download + compare. `quick_check` auto-disabled. Documented: works but slow for large files. |
 | 60b | Server rate-limits Range requests | DOCUMENT | Multiple Range requests per file may trigger rate limits. With `quick_check`, up to 4 requests before full comparison. User can disable: `quick_check=False` → single sequential request. |
 | 60c | Retry makes rate limit worse | DOCUMENT | `retries=0` (default). Retries are opt-in. User enables only if they know server tolerates retries. |
@@ -87,11 +88,11 @@ Three-pass analysis. Every case has a status:
 
 | # | Case | Status | Behavior |
 |---|------|--------|----------|
-| 60 | File modified during comparison | HANDLE | `integrity_check=True` (default): record `mtime`+`size` before, verify after. Changed → `SourceReadError`. |
+| 60 | File modified during comparison | PLANNED | Record `mtime`+`size` before comparison, verify after. Changed → `SourceReadError`. |
 | 61 | File deleted during comparison | HANDLE | OS returns error on next read → `SourceReadError`. |
-| 62 | File replaced (deleted + created) during comparison | HANDLE | `integrity_check` catches via inode change or mtime change. |
-| 63 | File truncated during comparison | HANDLE | Read returns fewer bytes than expected → caught by chunk comparison or `integrity_check`. |
-| 64 | File appended during comparison | HANDLE | `integrity_check` catches via size/mtime change. |
+| 62 | File replaced (deleted + created) during comparison | PLANNED | Detect via inode change or mtime change. |
+| 63 | File truncated during comparison | HANDLE | Read returns fewer bytes than expected → caught by chunk comparison. |
+| 64 | File appended during comparison | PLANNED | Detect via size/mtime change after comparison. |
 | 65 | Sparse files | DOCUMENT | `mmap` reads holes as zeros. Two sparse files with same logical content compare as equal. Correct behavior. |
 | 66 | File with extended attributes (xattr) | DOCUMENT | Ignored. We compare content only, not metadata. |
 | 67 | File with ACLs | DOCUMENT | Ignored. ACLs affect access, not content. If readable, we read it. |
@@ -127,7 +128,7 @@ Three-pass analysis. Every case has a status:
 | 91 | Mount points inside directory | DOCUMENT | Traversed by default. Different filesystem = different device, still traversed. |
 | 92 | One entry is a file in dir_a, directory in dir_b | HANDLE | `DiffReason.TYPE_MISMATCH`. |
 | 93 | Trailing slash inconsistency in dir paths | HANDLE | Normalize: strip trailing slashes. |
-| 94 | Both dirs are same path | HANDLE | Detect via `(dev, ino)` of root → instant `DirResult(equal=True)`. |
+| 94 | Both dirs are same path | PLANNED | Detect via `(dev, ino)` of root → instant `DirResult(equal=True)`. |
 
 ## V. Archive Comparison
 
@@ -183,7 +184,7 @@ Three-pass analysis. Every case has a status:
 
 | # | Case | Status | Behavior |
 |---|------|--------|----------|
-| 135 | `max_workers=0` | HANDLE | `ConfigError("max_workers must be >= 1")`. |
+| 135 | `max_workers=0` | HANDLE | Auto-detect: `min(cpu_count, 8)`. |
 | 136 | `max_workers=1` | HANDLE | Sequential execution. Valid. |
 | 137 | `max_workers` > CPU count | HANDLE | Allowed. User's choice. Document that oversubscription may hurt performance. |
 | 138 | `max_workers` > number of file pairs | HANDLE | Extra workers idle. No harm. |
@@ -209,8 +210,8 @@ Three-pass analysis. Every case has a status:
 | 153 | `timeout=0` | HANDLE | `ConfigError("timeout must be > 0 or None")`. |
 | 154 | `timeout < 0` | HANDLE | Same as #153. |
 | 155 | `comparison_timeout=0` | HANDLE | `ConfigError`. |
-| 156 | `retries < 0` | HANDLE | `ConfigError("retries must be >= 0")`. |
-| 157 | `retries=0` | HANDLE | No retries. First failure is final. Valid. |
+| 156 | Reserved | N/A | — |
+| 157 | Reserved | N/A | — |
 | 158 | `Source()` with local path | HANDLE | HTTP options ignored. File reader used. No error. |
 | 159 | `Source()` with empty headers `{}` | HANDLE | Treated as no custom headers. Falls through to global. |
 | 160 | `Source()` with empty URL `""` | HANDLE | `ConfigError("empty source path")`. |

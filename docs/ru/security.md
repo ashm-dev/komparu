@@ -100,7 +100,7 @@ result = komparu.compare_archive(
 | Лимит | Область | При превышении |
 |-------|---------|----------------|
 | `max_decompressed_size` | На архив | `ArchiveBombError("decompressed size 1.2 GB exceeds limit 1 GB")` |
-| `max_compression_ratio` | На архив, проверяется каждый чанк | `ArchiveBombError("compression ratio 350:1 exceeds limit 200:1")` |
+| `max_compression_ratio` | На архив, проверяется после каждой записи | `ArchiveBombError("compression ratio 350:1 exceeds limit 200:1")` |
 | `max_archive_entries` | На архив | `ArchiveBombError("entry count 150000 exceeds limit 100000")` |
 | `max_entry_name_length` | На запись | `ArchiveBombError("entry name 8500 bytes exceeds limit 4096")` |
 | `comparison_timeout` | На вызов (wall-clock) | `TimeoutError("comparison exceeded 300s timeout")` |

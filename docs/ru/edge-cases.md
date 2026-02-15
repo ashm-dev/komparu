@@ -1,7 +1,8 @@
 # komparu — Полный реестр крайних случаев
 
 Анализ в три прохода. Статусы:
-- **HANDLE** — обработать в коде
+- **HANDLE** — обработано в коде
+- **PLANNED** — запланировано для будущей реализации
 - **DETECT** — обнаружить и сообщить (ошибка/предупреждение)
 - **DOCUMENT** — ожидаемое поведение, задокументировать
 
@@ -11,9 +12,9 @@
 
 | # | Кейс | Статус | Поведение |
 |---|------|--------|-----------|
-| 1 | Оба файла 0 байт | DOCUMENT | `True`. Пустое равно пустому. `min_size` — opt-in для строгих проверок. |
+| 1 | Оба файла 0 байт | DOCUMENT | `True`. Пустое равно пустому. |
 | 2 | Один файл 0 байт, другой нет | HANDLE | Size pre-check → мгновенный `False`. |
-| 3 | Один и тот же путь (`compare("/a", "/a")`) | HANDLE | Определяем через `(dev, ino)` → мгновенный `True`, без I/O. |
+| 3 | Один и тот же путь (`compare("/a", "/a")`) | PLANNED | Определение через `(dev, ino)` → мгновенный `True`, без I/O. |
 | 4 | Одинаковый URL | DOCUMENT | **Без шортката.** Один URL может вернуть разный контент (динамика, CDN-ноды, кэш). Всегда сравниваем. Только локальные файлы получают шорткат через inode. |
 | 4a | URL с разными query-параметрами | DOCUMENT | Разные ресурсы. `?v=1` ≠ `?v=2`. Query-параметры не нормализуем. |
 | 5 | Источник не существует (локальный) | HANDLE | `SourceNotFoundError` с путём. |
@@ -30,7 +31,7 @@
 | 16 | Слеш в конце пути | HANDLE | Нормализуем: убираем trailing slashes для файлов. |
 | 17 | Файл на NFS/SMB | DOCUMENT | Работает. Производительность зависит от сети. `mmap` может вести себя иначе. |
 | 18 | Файл на read-only ФС | DOCUMENT | Мы только читаем — OK. |
-| 19 | Hard links (один inode, разные пути) | HANDLE | Определяем кейсом #3 (`dev, ino` совпадают) → мгновенный `True`. |
+| 19 | Hard links (один inode, разные пути) | PLANNED | Определение через `(dev, ino)` → мгновенный `True`. Зависит от #3. |
 | 20 | `str` vs `bytes` путь в Python | HANDLE | Принимаем оба. `str` кодируем через `os.fsencode()`. |
 | 21 | Путь с null-байтом | HANDLE | Отклоняем: `ConfigError("path contains null byte")`. |
 
@@ -46,9 +47,9 @@
 | 26 | HTTP 403 Forbidden | HANDLE | `SourceReadError("HTTP 403 for 'url'")`. |
 | 27 | HTTP 404 Not Found | HANDLE | `SourceNotFoundError("HTTP 404 for 'url'")`. |
 | 28 | HTTP 429 Too Many Requests | HANDLE | `SourceReadError` со статус-кодом. **Без авто-ретрая** — rate limits сервера, ретраи только ухудшат. Ретраи — opt-in. |
-| 29 | HTTP 5xx ошибки сервера | HANDLE | `SourceReadError` со статус-кодом. Ретрай только при `retries > 0` (по умолчанию: `0`, отключено). |
-| 30 | Таймаут соединения | HANDLE | `SourceReadError`. Ретрай только при `retries > 0`. |
-| 31 | Обрыв соединения в процессе | HANDLE | `SourceReadError`. Ретрай только при `retries > 0`. Возможно возобновление с позиции если сервер поддерживает Range. |
+| 29 | HTTP 5xx ошибки сервера | HANDLE | `SourceReadError` со статус-кодом. Без авто-ретрая. |
+| 30 | Таймаут соединения | HANDLE | `SourceReadError`. Без авто-ретрая. |
+| 31 | Обрыв соединения в процессе | HANDLE | `SourceReadError`. Без авто-ретрая. |
 | 32 | Ошибка DNS | HANDLE | `SourceReadError("DNS resolution failed for 'host'")`. |
 | 33 | Невалидный/просроченный SSL-сертификат | HANDLE | Ошибка по умолчанию. `verify_ssl=False` для отключения. |
 | 34 | Self-signed сертификат | HANDLE | Аналогично #33. |
@@ -56,10 +57,10 @@
 | 36 | `Transfer-Encoding: chunked` | HANDLE | libcurl обрабатывает прозрачно. |
 | 37 | `Content-Length` врёт | HANDLE | Size pre-check — рекомендация. Чанковое сравнение ловит реальный EOF. |
 | 38 | Нет `Content-Length` заголовка | HANDLE | Пропускаем size pre-check для этого источника. Чанковое сравнение работает без него. |
-| 39 | Сервер возвращает неправильные байты для Range | HANDLE | Проверяем `Content-Range` в ответе. Несовпадение → `SourceReadError`. |
+| 39 | Сервер возвращает неправильные байты для Range | PLANNED | Проверка `Content-Range` в ответе. Несовпадение → `SourceReadError`. |
 | 40 | Presigned URL истекает в процессе | DETECT | HTTP 403 в середине → `SourceReadError` с контекстом. Документируем: используйте достаточный TTL. |
 | 41 | Очень медленный сервер (1 байт/сек) | HANDLE | `timeout` для per-request. `comparison_timeout` для общего wall-clock. |
-| 42 | Сервер зависает (нет ответа) | HANDLE | `timeout` → `SourceReadError`. |
+| 42 | Сервер зависает (без ответа) | HANDLE | `timeout` → `SourceReadError`. |
 | 43 | Сервер закрывает соединение после N запросов | HANDLE | libcurl переподключается автоматически. Connection pooling. |
 | 44 | CDN отдаёт разный контент с разных нод | DOCUMENT | Не определяемо на нашем уровне. Ответственность пользователя. |
 | 45 | Контент зависит от User-Agent или Referer | DOCUMENT | Пользователь задаёт `headers` при необходимости. |
@@ -76,8 +77,8 @@
 | 55 | `file://` URL | HANDLE | Трактуем как локальный путь. Используем file reader. |
 | 56 | `ftp://`, `data:`, `ws://` URL | HANDLE | `ConfigError("unsupported URL scheme")`. Только `http`, `https`, `file`. |
 | 57 | HTTP/2 vs HTTP/1.1 | HANDLE | libcurl выбирает автоматически. |
-| 58 | Сервер возвращает 0 байт с 200 OK | DOCUMENT | Как пустой файл. Кейс #1. `min_size` для защиты. |
-| 59 | ETag изменился между Range-запросами | HANDLE | Сохраняем ETag от первого запроса. Проверяем в последующих. Несовпадение → `SourceReadError("source content changed during comparison")`. |
+| 58 | Сервер возвращает 0 байт с 200 OK | DOCUMENT | Как пустой файл. Кейс #1. |
+| 59 | ETag изменился между Range-запросами | PLANNED | Сохранение ETag от первого запроса. Проверка в последующих. Несовпадение → `SourceReadError("source content changed during comparison")`. |
 | 60a | Сервер отдаёт только целиком (нет Range, нет HEAD) | HANDLE | Определяем при первом запросе (200 вместо 206). Переключаемся на полный последовательный стриминг. `quick_check` отключается. |
 | 60b | Сервер rate-limitit Range-запросы | DOCUMENT | Несколько Range-запросов на файл могут вызвать rate limit. С `quick_check` — до 4 запросов. Отключить: `quick_check=False` → один последовательный запрос. |
 | 60c | Ретрай ухудшает rate limit | DOCUMENT | `retries=0` (по умолчанию). Ретраи — opt-in. Пользователь включает только если уверен что сервер выдержит. |
@@ -86,11 +87,11 @@
 
 | # | Кейс | Статус | Поведение |
 |---|------|--------|-----------|
-| 61 | Файл изменён во время сравнения | HANDLE | `integrity_check=True` (default): фиксируем `mtime`+`size` до, проверяем после. Изменился → `SourceReadError`. |
+| 61 | Файл изменён во время сравнения | PLANNED | Фиксация `mtime`+`size` до сравнения, проверка после. Изменился → `SourceReadError`. |
 | 62 | Файл удалён во время сравнения | HANDLE | ОС возвращает ошибку → `SourceReadError`. |
-| 63 | Файл заменён во время сравнения | HANDLE | `integrity_check` ловит через изменение inode или mtime. |
-| 64 | Файл обрезан во время сравнения | HANDLE | Read возвращает меньше байт → ловится чанковым сравнением или `integrity_check`. |
-| 65 | Файл дозаписан во время сравнения | HANDLE | `integrity_check` ловит через size/mtime. |
+| 63 | Файл заменён во время сравнения | PLANNED | Определение через изменение inode или mtime. |
+| 64 | Файл обрезан во время сравнения | HANDLE | Read возвращает меньше байт → ловится чанковым сравнением. |
+| 65 | Файл дозаписан во время сравнения | PLANNED | Определение через size/mtime после сравнения. |
 | 66 | Sparse-файлы | DOCUMENT | `mmap` читает дыры как нули. Два sparse-файла с одинаковым логическим содержимым = equal. Корректно. |
 | 67 | Extended attributes (xattr) | DOCUMENT | Игнорируем. Сравниваем только содержимое. |
 | 68 | ACL | DOCUMENT | Игнорируем. ACL влияют на доступ, не на содержимое. |
@@ -126,7 +127,7 @@
 | 92 | Mount points внутри директории | DOCUMENT | Обходятся по умолчанию. |
 | 93 | Запись — файл в dir_a, директория в dir_b | HANDLE | `DiffReason.TYPE_MISMATCH`. |
 | 94 | Слеш в конце пути директории | HANDLE | Нормализуем. |
-| 95 | Обе директории — один путь | HANDLE | Определяем через `(dev, ino)` → мгновенный `DirResult(equal=True)`. |
+| 95 | Обе директории — один путь | PLANNED | Определение через `(dev, ino)` → мгновенный `DirResult(equal=True)`. |
 
 ## V. Сравнение архивов
 
@@ -182,7 +183,7 @@
 
 | # | Кейс | Статус | Поведение |
 |---|------|--------|-----------|
-| 136 | `max_workers=0` | HANDLE | `ConfigError("max_workers must be >= 1")`. |
+| 136 | `max_workers=0` | HANDLE | Автоопределение: `min(cpu_count, 8)`. |
 | 137 | `max_workers=1` | HANDLE | Последовательное выполнение. Валидно. |
 | 138 | `max_workers` > CPU count | HANDLE | Разрешено. Документируем что oversubscription может снизить производительность. |
 | 139 | `max_workers` > количество пар файлов | HANDLE | Лишние воркеры простаивают. Безвредно. |
@@ -208,8 +209,8 @@
 | 154 | `timeout=0` | HANDLE | `ConfigError("timeout must be > 0 or None")`. |
 | 155 | `timeout < 0` | HANDLE | Аналогично #154. |
 | 156 | `comparison_timeout=0` | HANDLE | `ConfigError`. |
-| 157 | `retries < 0` | HANDLE | `ConfigError("retries must be >= 0")`. |
-| 158 | `retries=0` | HANDLE | Без ретраев. Первая ошибка — финальная. Валидно. |
+| 157 | Зарезервировано | N/A | — |
+| 158 | Зарезервировано | N/A | — |
 | 159 | `Source()` с локальным путём | HANDLE | HTTP-опции игнорируются. File reader. Без ошибки. |
 | 160 | `Source()` с пустыми headers `{}` | HANDLE | Как отсутствие кастомных headers. Глобальные настройки. |
 | 161 | `Source()` с пустым URL `""` | HANDLE | `ConfigError("empty source path")`. |

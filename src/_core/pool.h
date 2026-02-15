@@ -1,7 +1,7 @@
 /**
  * pool.h — Thread pool for parallel file comparison.
  *
- * Lock-free ring buffer task queue with worker threads.
+ * Dynamic circular task queue with mutex+condvar and worker threads.
  * pthreads on Linux/macOS, Windows threads on Windows.
  */
 
@@ -27,7 +27,7 @@ komparu_pool_t *komparu_pool_create(size_t num_workers);
 /**
  * Submit a task to the pool.
  *
- * Returns 0 on success, -1 if queue is full.
+ * Returns 0 on success, -1 on error.
  */
 int komparu_pool_submit(komparu_pool_t *pool, komparu_task_fn fn, void *arg);
 
