@@ -18,6 +18,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <stdatomic.h>
 
 #ifdef KOMPARU_LINUX
 #include <sys/eventfd.h>
@@ -31,6 +32,16 @@ typedef enum {
     KOMPARU_ASYNC_COMPARE,
     KOMPARU_ASYNC_COMPARE_DIR,
 } komparu_async_type_t;
+
+/* Task lifecycle states (CAS transitions only):
+ *   RUNNING → DONE      (worker finishes normally)
+ *   RUNNING → ORPHANED  (Python discards handle before worker finishes)
+ * Exactly one side (worker or destructor) owns the free. */
+typedef enum {
+    KOMPARU_TASK_RUNNING  = 0,  /* zero-init via calloc */
+    KOMPARU_TASK_DONE     = 1,
+    KOMPARU_TASK_ORPHANED = 2,
+} komparu_task_state_t;
 
 /* =========================================================================
  * Task structure
@@ -67,7 +78,9 @@ struct komparu_async_task {
     komparu_dir_result_t *dir_result;
     char error_buf[512];
     bool has_error;
-    bool done;
+
+    /* Lifecycle state (CAS-only transitions, see komparu_task_state_t) */
+    _Atomic int state;
 };
 
 /* =========================================================================
@@ -96,10 +109,10 @@ static int notify_create(int *read_fd, int *write_fd) {
 static void notify_signal(int write_fd) {
 #ifdef KOMPARU_LINUX
     uint64_t val = 1;
-    (void)write(write_fd, &val, sizeof(val));
+    while (write(write_fd, &val, sizeof(val)) < 0 && errno == EINTR);
 #else
     char c = 1;
-    (void)write(write_fd, &c, 1);
+    while (write(write_fd, &c, 1) < 0 && errno == EINTR);
 #endif
 }
 
@@ -112,17 +125,20 @@ static void notify_close(int read_fd, int write_fd) {
  * Global async pool — lazily initialized
  * ========================================================================= */
 
-static komparu_pool_t *g_async_pool = NULL;
+static _Atomic(komparu_pool_t *) g_async_pool = NULL;
 static pthread_mutex_t g_pool_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static komparu_pool_t *get_pool(void) {
-    if (g_async_pool) return g_async_pool;
+    komparu_pool_t *pool = atomic_load_explicit(&g_async_pool, memory_order_acquire);
+    if (pool) return pool;
     pthread_mutex_lock(&g_pool_mutex);
-    if (!g_async_pool) {
-        g_async_pool = komparu_pool_create(0);  /* auto-detect workers */
+    pool = atomic_load_explicit(&g_async_pool, memory_order_relaxed);
+    if (!pool) {
+        pool = komparu_pool_create(0);  /* auto-detect workers */
+        atomic_store_explicit(&g_async_pool, pool, memory_order_release);
     }
     pthread_mutex_unlock(&g_pool_mutex);
-    return g_async_pool;
+    return pool;
 }
 
 /* =========================================================================
@@ -132,6 +148,25 @@ static komparu_pool_t *get_pool(void) {
 static bool is_url(const char *s) {
     return (strncmp(s, "http://", 7) == 0 ||
             strncmp(s, "https://", 8) == 0);
+}
+
+static void task_free_internals(komparu_async_task_t *task);
+
+/* =========================================================================
+ * Worker completion: signal done + self-free if orphaned
+ * ========================================================================= */
+
+static void worker_finish(komparu_async_task_t *task) {
+    int expected = KOMPARU_TASK_RUNNING;
+    if (atomic_compare_exchange_strong_explicit(&task->state, &expected,
+            KOMPARU_TASK_DONE, memory_order_acq_rel, memory_order_acquire)) {
+        /* Normal completion — Python will read result and free. */
+        notify_signal(task->write_fd);
+    } else {
+        /* ORPHANED: Python discarded the handle. We own the memory. */
+        task_free_internals(task);
+        free(task);
+    }
 }
 
 /* =========================================================================
@@ -158,8 +193,7 @@ static void compare_worker(void *arg) {
                  "cannot open '%s': %s", task->source_a,
                  err ? err : "unknown error");
         task->has_error = true;
-        task->done = true;
-        notify_signal(task->write_fd);
+        worker_finish(task);
         return;
     }
 
@@ -180,8 +214,7 @@ static void compare_worker(void *arg) {
                  "cannot open '%s': %s", task->source_b,
                  err ? err : "unknown error");
         task->has_error = true;
-        task->done = true;
-        notify_signal(task->write_fd);
+        worker_finish(task);
         return;
     }
 
@@ -193,8 +226,7 @@ static void compare_worker(void *arg) {
             task->cmp_result = KOMPARU_DIFFERENT;
             ra->close(ra);
             rb->close(rb);
-            task->done = true;
-            notify_signal(task->write_fd);
+            worker_finish(task);
             return;
         }
         if (qr == KOMPARU_ERROR && ra->seek && rb->seek) {
@@ -215,8 +247,7 @@ static void compare_worker(void *arg) {
 
     ra->close(ra);
     rb->close(rb);
-    task->done = true;
-    notify_signal(task->write_fd);
+    worker_finish(task);
 }
 
 /* =========================================================================
@@ -240,8 +271,7 @@ static void compare_dir_worker(void *arg) {
         task->has_error = true;
     }
 
-    task->done = true;
-    notify_signal(task->write_fd);
+    worker_finish(task);
 }
 
 /* =========================================================================
@@ -275,7 +305,8 @@ static komparu_async_task_t *task_alloc(
     task->source_b = strdup(source_b);
     if (!task->source_a || !task->source_b) {
         *err_msg = "out of memory";
-        komparu_async_task_free(task);
+        task_free_internals(task);
+        free(task);
         return NULL;
     }
 
@@ -317,14 +348,16 @@ komparu_async_task_t *komparu_async_compare(
             task->headers = calloc(count + 1, sizeof(char *));
             if (!task->headers) {
                 *err_msg = "out of memory";
-                komparu_async_task_free(task);
+                task_free_internals(task);
+                free(task);
                 return NULL;
             }
             for (size_t i = 0; i < count; i++) {
                 task->headers[i] = strdup(headers[i]);
                 if (!task->headers[i]) {
                     *err_msg = "out of memory";
-                    komparu_async_task_free(task);
+                    task_free_internals(task);
+                    free(task);
                     return NULL;
                 }
             }
@@ -342,7 +375,8 @@ komparu_async_task_t *komparu_async_compare(
 
     if (komparu_pool_submit(pool, compare_worker, task) != 0) {
         *err_msg = "async pool queue full";
-        komparu_async_task_free(task);
+        task_free_internals(task);
+        free(task);
         return NULL;
     }
 
@@ -377,7 +411,8 @@ komparu_async_task_t *komparu_async_compare_dir(
 
     if (komparu_pool_submit(pool, compare_dir_worker, task) != 0) {
         *err_msg = "async pool queue full";
-        komparu_async_task_free(task);
+        task_free_internals(task);
+        free(task);
         return NULL;
     }
 
@@ -393,6 +428,8 @@ int komparu_async_task_cmp_result(
     bool *out,
     const char **err_msg
 ) {
+    /* Acquire barrier: see all writes from the worker thread. */
+    (void)atomic_load_explicit(&task->state, memory_order_acquire);
     if (task->has_error) {
         *err_msg = task->error_buf;
         return -1;
@@ -405,6 +442,8 @@ komparu_dir_result_t *komparu_async_task_dir_result(
     komparu_async_task_t *task,
     const char **err_msg
 ) {
+    /* Acquire barrier: see all writes from the worker thread. */
+    (void)atomic_load_explicit(&task->state, memory_order_acquire);
     if (task->has_error) {
         *err_msg = task->error_buf;
         return NULL;
@@ -414,19 +453,8 @@ komparu_dir_result_t *komparu_async_task_dir_result(
     return r;
 }
 
-void komparu_async_task_free(komparu_async_task_t *task) {
-    if (!task) return;
-
-    /* If task is still running, block until completion */
-    if (!task->done && task->read_fd >= 0) {
-        int flags = fcntl(task->read_fd, F_GETFL, 0);
-        if (flags >= 0) {
-            fcntl(task->read_fd, F_SETFL, flags & ~O_NONBLOCK);
-        }
-        char buf[8];
-        (void)read(task->read_fd, buf, sizeof(buf));
-    }
-
+/** Free internal resources of a task (does NOT free the task struct). */
+static void task_free_internals(komparu_async_task_t *task) {
     notify_close(task->read_fd, task->write_fd);
     free(task->source_a);
     free(task->source_b);
@@ -437,15 +465,37 @@ void komparu_async_task_free(komparu_async_task_t *task) {
     }
     if (task->dir_result)
         komparu_dir_result_free(task->dir_result);
+}
+
+void komparu_async_task_free(komparu_async_task_t *task) {
+    if (!task) return;
+
+    int state = atomic_load_explicit(&task->state, memory_order_acquire);
+    if (state == KOMPARU_TASK_DONE) {
+        task_free_internals(task);
+        free(task);
+        return;
+    }
+
+    /* Task still running — try to orphan. Worker will free on completion. */
+    int expected = KOMPARU_TASK_RUNNING;
+    if (atomic_compare_exchange_strong_explicit(&task->state, &expected,
+            KOMPARU_TASK_ORPHANED, memory_order_acq_rel, memory_order_acquire)) {
+        return;  /* Worker owns the memory now */
+    }
+
+    /* CAS failed: worker finished between our load and CAS. Free now. */
+    task_free_internals(task);
     free(task);
 }
 
 void komparu_async_cleanup(void) {
     pthread_mutex_lock(&g_pool_mutex);
-    if (g_async_pool) {
-        komparu_pool_wait(g_async_pool);
-        komparu_pool_destroy(g_async_pool);
-        g_async_pool = NULL;
+    komparu_pool_t *pool = atomic_load_explicit(&g_async_pool, memory_order_relaxed);
+    if (pool) {
+        komparu_pool_wait(pool);
+        komparu_pool_destroy(pool);
+        atomic_store_explicit(&g_async_pool, NULL, memory_order_release);
     }
     pthread_mutex_unlock(&g_pool_mutex);
 }

@@ -81,7 +81,8 @@ komparu_dir_result_t *komparu_async_task_dir_result(
 );
 
 /**
- * Free the task. If task is still running, blocks until completion.
+ * Free the task. If task is still running, it is detached — the worker
+ * will free resources upon completion. Does NOT block.
  */
 void komparu_async_task_free(komparu_async_task_t *task);
 

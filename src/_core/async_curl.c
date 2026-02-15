@@ -13,6 +13,7 @@
 #include "async_curl.h"
 #include "compat.h"
 #include <curl/curl.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -113,7 +114,12 @@ static curl_socket_t async_ssrf_cb(
 
 static size_t async_write_cb(char *ptr, size_t size, size_t nmemb, void *userdata) {
     komparu_async_http_t *h = userdata;
+    /* Overflow check: size * nmemb */
+    if (KOMPARU_UNLIKELY(nmemb != 0 && size > SIZE_MAX / nmemb)) return 0;
     size_t total = size * nmemb;
+
+    /* Overflow check: write_pos + total */
+    if (KOMPARU_UNLIKELY(total > SIZE_MAX - h->write_pos)) return 0;
 
     /* Compact if we need space and there's consumed data at front */
     if (h->write_pos + total > h->buf_cap && h->read_pos > 0) {
@@ -131,6 +137,8 @@ static size_t async_write_cb(char *ptr, size_t size, size_t nmemb, void *userdat
             if (KOMPARU_UNLIKELY(new_cap > SIZE_MAX / 2)) return 0;
             new_cap *= 2;
         }
+        /* Hard cap: 256 MB to prevent unbounded growth (DoS) */
+        if (KOMPARU_UNLIKELY(new_cap > (256UL * 1024 * 1024))) return 0;
         uint8_t *tmp = realloc(h->buf, new_cap);
         if (KOMPARU_UNLIKELY(!tmp)) return 0;
         h->buf = tmp;
@@ -149,8 +157,12 @@ static int async_socket_cb(
     komparu_async_http_t *h = cbp;
 
     if (what == CURL_POLL_REMOVE) {
-        h->sock = -1;
-        h->sock_events = 0;
+        /* Only clear if this is the socket we're tracking —
+         * libcurl may remove a stale socket while a new one is active */
+        if (h->sock == (int)s) {
+            h->sock = -1;
+            h->sock_events = 0;
+        }
     } else {
         h->sock = (int)s;
         h->sock_events = 0;
@@ -234,7 +246,8 @@ komparu_async_http_t *komparu_async_http_open(
     curl_easy_setopt(h->easy, CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
 
     if (timeout > 0) {
-        long ms = (long)(timeout * 1000.0);
+        long ms = (timeout > (double)LONG_MAX / 1000.0)
+                  ? LONG_MAX : (long)(timeout * 1000.0);
         curl_easy_setopt(h->easy, CURLOPT_TIMEOUT_MS, ms);
         curl_easy_setopt(h->easy, CURLOPT_CONNECTTIMEOUT_MS,
                          ms < 10000 ? ms : 10000L);
@@ -251,8 +264,18 @@ komparu_async_http_t *komparu_async_http_open(
 
     /* Custom headers */
     if (headers) {
-        for (const char **hp = headers; *hp; hp++)
-            h->hdrs = curl_slist_append(h->hdrs, *hp);
+        for (const char **hp = headers; *hp; hp++) {
+            struct curl_slist *tmp = curl_slist_append(h->hdrs, *hp);
+            if (KOMPARU_UNLIKELY(!tmp)) {
+                *err_msg = "out of memory for headers";
+                if (h->hdrs) curl_slist_free_all(h->hdrs);
+                curl_easy_cleanup(h->easy);
+                curl_multi_cleanup(h->multi);
+                free(h);
+                return NULL;
+            }
+            h->hdrs = tmp;
+        }
         curl_easy_setopt(h->easy, CURLOPT_HTTPHEADER, h->hdrs);
     }
 

@@ -52,6 +52,8 @@ async def _await_task(fd: int, get_result):
 
     def _on_ready():
         loop.remove_reader(fd)
+        if future.done():
+            return
         try:
             result = get_result()
             future.set_result(result)
@@ -59,7 +61,11 @@ async def _await_task(fd: int, get_result):
             future.set_exception(e)
 
     loop.add_reader(fd, _on_ready)
-    return await future
+    try:
+        return await future
+    finally:
+        # Ensure reader is removed even if the coroutine is cancelled
+        loop.remove_reader(fd)
 
 
 # =========================================================================
