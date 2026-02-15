@@ -214,9 +214,14 @@ static void notify_signal(int write_fd) {
     char c = 1;
     while (write(write_fd, &c, 1) < 0 && errno == EINTR);
 
-    /* Drain pending SIGPIPE (if generated while blocked) before unmasking */
+    /* Drain pending SIGPIPE before unmasking.
+     * sigtimedwait is not available on macOS (Darwin never implemented it).
+     * On macOS we leave the signal pending — it stays blocked and is
+     * discarded when the worker thread exits. Harmless. */
+#ifndef KOMPARU_MACOS
     struct timespec zero = {0, 0};
     sigtimedwait(&block, NULL, &zero);
+#endif
     pthread_sigmask(SIG_SETMASK, &old, NULL);
 #endif
 }
