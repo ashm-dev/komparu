@@ -98,6 +98,7 @@ static int notify_create(int *read_fd, int *write_fd) {
     int fds[2];
     if (pipe(fds) != 0) return -1;
     fcntl(fds[0], F_SETFL, O_NONBLOCK);
+    fcntl(fds[1], F_SETFL, O_NONBLOCK);
     fcntl(fds[0], F_SETFD, FD_CLOEXEC);
     fcntl(fds[1], F_SETFD, FD_CLOEXEC);
     *read_fd = fds[0];
