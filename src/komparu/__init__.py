@@ -223,12 +223,20 @@ def compare_all(
     if max_workers == 1 or len(others) == 1:
         return all(compare(ref, s, **kwargs) for s in others)
 
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     pool_size = max_workers if max_workers > 0 else min(len(others), 8)
     with ThreadPoolExecutor(max_workers=pool_size) as pool:
         futures = [pool.submit(compare, ref, s, **kwargs) for s in others]
-        return all(f.result() for f in futures)
+        try:
+            for f in as_completed(futures):
+                if not f.result():
+                    return False
+        finally:
+            # Cancel pending futures on early exit
+            for f in futures:
+                f.cancel()
+        return True
 
 
 def compare_many(

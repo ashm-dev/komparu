@@ -31,6 +31,8 @@ static bool is_url(const char *source) {
  * Must be called with GIL held. Caller must free with free_header_array().
  * ========================================================================= */
 
+static void free_header_array(const char **arr, size_t count);
+
 static const char **build_header_array(
     PyObject *py_headers,
     size_t *out_count,
@@ -56,23 +58,20 @@ static const char **build_header_array(
         const char *k = PyUnicode_AsUTF8(key);
         const char *v = PyUnicode_AsUTF8(value);
         if (!k || !v) {
-            for (size_t j = 0; j < idx; j++) free((void *)arr[j]);
-            free(arr);
+            free_header_array(arr, idx);
             *err_msg = "header keys and values must be strings";
             return NULL;
         }
         /* Reject CRLF in headers to prevent header injection */
         if (strpbrk(k, "\r\n") || strpbrk(v, "\r\n")) {
-            for (size_t j = 0; j < idx; j++) free((void *)arr[j]);
-            free(arr);
+            free_header_array(arr, idx);
             *err_msg = "header keys/values must not contain CR/LF";
             return NULL;
         }
         size_t len = strlen(k) + strlen(v) + 3;
         char *hdr = malloc(len);
         if (!hdr) {
-            for (size_t j = 0; j < idx; j++) free((void *)arr[j]);
-            free(arr);
+            free_header_array(arr, idx);
             *err_msg = "out of memory for header string";
             return NULL;
         }
@@ -233,13 +232,14 @@ open_failed:
     result = KOMPARU_ERROR;
 
 done:
-    KOMPARU_GIL_ACQUIRE()
-
-    /* Cleanup */
+    /* Close readers before re-acquiring GIL — close() is pure C
+     * (munmap, close(fd), curl_easy_cleanup) and can be slow for HTTP. */
     if (reader_a) reader_a->close(reader_a);
     if (reader_b) reader_b->close(reader_b);
     free_header_array(header_array, header_count);
     free(proxy_copy);
+
+    KOMPARU_GIL_ACQUIRE()
 
     /* Convert result to Python */
     switch (result) {
@@ -1074,6 +1074,9 @@ PyMODINIT_FUNC PyInit__core(void) {
                         "failed to initialize curl share handle");
         return NULL;
     }
+    /* Py_AtExit runs in LIFO order: TLS cleanup first, then share,
+     * then curl_global_cleanup last (registered first). */
+    Py_AtExit(komparu_curl_global_cleanup);
     Py_AtExit(komparu_curl_share_cleanup);
     Py_AtExit(komparu_compare_tls_cleanup);
 

@@ -204,8 +204,20 @@ static void notify_signal(int write_fd) {
     uint64_t val = 1;
     while (write(write_fd, &val, sizeof(val)) < 0 && errno == EINTR);
 #else
+    /* Pipe: if read end is already closed, write() raises SIGPIPE.
+     * Block it for this call to get EPIPE instead. */
+    sigset_t block, old;
+    sigemptyset(&block);
+    sigaddset(&block, SIGPIPE);
+    pthread_sigmask(SIG_BLOCK, &block, &old);
+
     char c = 1;
     while (write(write_fd, &c, 1) < 0 && errno == EINTR);
+
+    /* Drain pending SIGPIPE (if generated while blocked) before unmasking */
+    struct timespec zero = {0, 0};
+    sigtimedwait(&block, NULL, &zero);
+    pthread_sigmask(SIG_SETMASK, &old, NULL);
 #endif
 }
 
