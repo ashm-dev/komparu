@@ -129,7 +129,7 @@ else:
 | `dir_a` | `str` | required | First directory path |
 | `dir_b` | `str` | required | Second directory path |
 | `max_workers` | `int` | `min(cpu, 8)` | Parallel workers |
-| `follow_symlinks` | `bool` | `False` | Follow symbolic links |
+| `follow_symlinks` | `bool` | `True` | Follow symbolic links |
 
 ### komparu.compare_archive(archive_a, archive_b, **options) -> DirResult
 

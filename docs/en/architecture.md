@@ -27,37 +27,30 @@ komparu/
 │       ├── dirwalk.h
 │       ├── pool.c                # Thread pool
 │       ├── pool.h
+│       ├── async_task.c          # Async task lifecycle (CAS, eventfd/pipe)
+│       ├── async_task.h
+│       ├── async_curl.c          # libcurl multi building blocks
+│       ├── async_curl.h
 │       └── compat.h              # Python version / platform compat macros
 ├── tests/
 │   ├── conftest.py
 │   ├── test_compare_local.py
 │   ├── test_compare_http.py
-│   ├── test_compare_mixed.py
 │   ├── test_compare_dir.py
 │   ├── test_compare_archive.py
-│   ├── test_compare_many.py
+│   ├── test_parallel.py
 │   ├── test_async.py
-│   ├── test_config.py
-│   └── fixtures/                 # Test files, archives
-├── benchmarks/
-│   ├── bench_local.py
-│   ├── bench_http.py
-│   └── bench_parallel.py
+│   └── test_config.py
+├── benchmarks/                   # (empty, planned)
 ├── docs/
 │   ├── en/
 │   └── ru/
-├── meson.build                   # Build system
-├── meson.options
+├── CMakeLists.txt                # Build system
 ├── pyproject.toml
 ├── LICENSE
 ├── README.md
-├── README.ru.md
-├── Dockerfile
 └── .github/
-    └── workflows/
-        ├── ci.yml                # Test matrix
-        ├── wheels.yml            # Build & publish wheels
-        └── bench.yml             # Benchmark regression
+    └── workflows/               # (planned)
 ```
 
 ## 2. C23 Core — Module Diagram
@@ -155,17 +148,25 @@ compare_dir(dir_a, dir_b):
 
 ```c
 typedef struct komparu_pool {
-    pthread_t *workers;       // Worker threads
-    size_t num_workers;       // Worker count
-    komparu_task_t *queue;    // Task queue (lock-free ring buffer)
-    atomic_bool shutdown;     // Shutdown flag
+    pthread_t *threads;
+    size_t num_workers;
+    pool_task_t *queue;       // Dynamic array (FIFO, head/tail)
+    size_t queue_cap;
+    size_t queue_head;
+    size_t queue_tail;
+    size_t queue_count;
+    pthread_mutex_t mutex;
+    pthread_cond_t task_avail;
+    pthread_cond_t all_done;
+    size_t active_count;
+    bool shutdown;
 } komparu_pool_t;
 ```
 
+- Dynamic array task queue with mutex + condvar synchronization
 - Default workers: `min(sysconf(_SC_NPROCESSORS_ONLN), 8)`
 - GIL released before submitting work to pool
 - Each task: one file pair comparison
-- Windows: `_beginthreadex` + `CRITICAL_SECTION`
 
 ## 7. Python Build Variants
 
@@ -216,31 +217,37 @@ Python call → C extension → GIL release → C I/O + compare → GIL acquire 
 
 Full pipeline in C. Maximum performance. Single FFI boundary crossing.
 
-### Async (komparu/aio.py → C extension with libcurl multi)
+### Async (komparu/aio.py → C pool + eventfd/pipe + asyncio)
 
 ```
-Python call → C extension → libcurl multi (non-blocking) → asyncio event loop integration → return
+Python call → async_compare_start() → C pool submits task → worker runs (GIL-free):
+    open_reader (file/HTTP) → komparu_compare → write to eventfd/pipe
+Python: asyncio.loop.add_reader(fd) → callback fires → async_compare_result(task)
 ```
 
-- HTTP I/O: **libcurl multi interface** — `curl_multi_socket_action()` integrated with asyncio via file descriptors
-- File I/O: `io_uring` (Linux) / `kqueue` (macOS) via C, non-blocking
-- All I/O in C — no Python HTTP libraries (no aiohttp, no aiofiles)
-- Event loop never blocked
-- C extension exposes Python awaitable objects (`__await__` protocol)
+- ALL async functions (compare, compare_dir, compare_archive, compare_dir_urls) use the same pattern: C pool + eventfd/pipe + `asyncio.loop.add_reader()`
+- Worker threads use libcurl easy (blocking) -- same I/O as the sync path
+- Notification via eventfd (Linux) or pipe (macOS) wakes the asyncio event loop
+- CAS-based task lifecycle: RUNNING -> DONE or RUNNING -> ORPHANED
+- No `curl_multi_socket_action` integration (async_curl.c exists as building blocks for future non-blocking HTTP, not used by the main async API)
+- No io_uring or kqueue for async I/O (workers use mmap same as sync)
+- No Python awaitable protocol (`__await__`) -- uses regular `async def` + `add_reader`
+- All I/O in C -- no Python HTTP libraries (no aiohttp, no aiofiles)
+- No `asyncio.to_thread()` wrapping -- true C pool with event loop notification
 
-Why separate: sync uses libcurl easy (blocking, GIL released, maximum throughput).
-Async uses libcurl multi (non-blocking, event loop integration, maximum concurrency).
-Same C core, different I/O strategies. Neither wraps the other.
+Why separate: sync blocks in C with GIL released. Async submits to C pool and
+integrates with asyncio via fd notification. Same C core, same I/O (libcurl easy,
+mmap), different scheduling strategies.
 
 ## 9. External Dependencies
 
 | Library | Purpose | Linking |
 |---------|---------|---------|
-| libcurl | HTTP/HTTPS — easy (sync) + multi (async) interfaces | Dynamic (system) or static (vendored for wheels). Require c-ares or threaded resolver. |
+| libcurl | HTTP/HTTPS — easy interface (sync and async workers) | Dynamic (system) or static (vendored for wheels). Require c-ares or threaded resolver. |
 | libarchive | Archive reading (zip, tar, 7z, etc.) | Dynamic (system) or static (vendored for wheels) |
 | pthreads | Thread pool (Linux/macOS) | System |
 
-No Python HTTP/IO dependencies. All I/O handled in C via libcurl and OS-native async (io_uring / kqueue).
+No Python HTTP/IO dependencies. All I/O handled in C via libcurl easy and mmap.
 
 ## 10. Platform Matrix
 

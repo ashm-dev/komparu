@@ -17,7 +17,6 @@ Usage::
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import Any
 
 from komparu._config import get_config
@@ -26,6 +25,10 @@ from komparu._core import (
     async_compare_result,
     async_compare_dir_start,
     async_compare_dir_result,
+    async_compare_archive_start,
+    async_compare_archive_result,
+    async_compare_dir_urls_start,
+    async_compare_dir_urls_result,
 )
 from komparu._types import CompareResult, DiffReason, DirResult, Source
 
@@ -171,22 +174,27 @@ async def compare_archive(
 ) -> DirResult:
     """Compare two archive files entry-by-entry (async).
 
-    Archive I/O runs in a C thread via libarchive.
+    Archive I/O runs in a C thread via libarchive. Completion
+    notification via eventfd integrated with asyncio.
     """
-    import komparu
+    cfg = get_config()
+    cs = chunk_size if chunk_size is not None else cfg.chunk_size
+    mds = max_decompressed_size if max_decompressed_size is not None else (cfg.max_decompressed_size or -1)
+    mcr = max_compression_ratio if max_compression_ratio is not None else (cfg.max_compression_ratio or -1)
+    me = max_archive_entries if max_archive_entries is not None else (cfg.max_archive_entries or -1)
+    menl = max_entry_name_length if max_entry_name_length is not None else (cfg.max_entry_name_length or -1)
 
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        None,
-        lambda: komparu.compare_archive(
-            path_a, path_b,
-            chunk_size=chunk_size,
-            max_decompressed_size=max_decompressed_size,
-            max_compression_ratio=max_compression_ratio,
-            max_archive_entries=max_archive_entries,
-            max_entry_name_length=max_entry_name_length,
-        ),
+    fd, task = async_compare_archive_start(
+        path_a, path_b,
+        chunk_size=cs,
+        max_decompressed_size=mds,
+        max_compression_ratio=mcr,
+        max_entries=me,
+        max_entry_name_length=menl,
     )
+
+    raw = await _await_task(fd, lambda: async_compare_archive_result(task))
+    return _build_dir_result(raw)
 
 
 async def compare_all(
@@ -316,55 +324,33 @@ async def compare_dir_urls(
 ) -> DirResult:
     """Compare directory files against URL mapping (async).
 
-    Each file-vs-URL comparison runs in a C pool thread.
+    Directory walk, HTTP fetches, and comparisons all run in C threads.
+    Completion notification via eventfd integrated with asyncio.
     """
-    kwargs: dict[str, Any] = {}
-    if chunk_size is not None:
-        kwargs["chunk_size"] = chunk_size
-    if size_precheck is not None:
-        kwargs["size_precheck"] = size_precheck
-    if quick_check is not None:
-        kwargs["quick_check"] = quick_check
-    if headers is not None:
-        kwargs["headers"] = headers
-    if timeout is not None:
-        kwargs["timeout"] = timeout
-    if follow_redirects is not None:
-        kwargs["follow_redirects"] = follow_redirects
-    if verify_ssl is not None:
-        kwargs["verify_ssl"] = verify_ssl
+    cfg = get_config()
+    cs = chunk_size if chunk_size is not None else cfg.chunk_size
+    sp = size_precheck if size_precheck is not None else cfg.size_precheck
+    qc = quick_check if quick_check is not None else cfg.quick_check
+    h = headers if headers is not None else (cfg.headers or None)
+    t = timeout if timeout is not None else cfg.timeout
+    fr = follow_redirects if follow_redirects is not None else cfg.follow_redirects
+    vs = verify_ssl if verify_ssl is not None else cfg.verify_ssl
+    ap = cfg.allow_private_redirects
 
-    loop = asyncio.get_running_loop()
+    fd, task = async_compare_dir_urls_start(
+        dir_path, url_map,
+        chunk_size=cs,
+        size_precheck=sp,
+        quick_check=qc,
+        headers=h if h else None,
+        timeout=t,
+        follow_redirects=fr,
+        verify_ssl=vs,
+        allow_private=ap,
+    )
 
-    # Walk local dir in executor (stat-heavy, fast)
-    def _walk() -> set[str]:
-        result: set[str] = set()
-        for root, _dirs, files in os.walk(dir_path):
-            for f in files:
-                result.add(os.path.relpath(os.path.join(root, f), dir_path))
-        return result
-
-    local_files = await loop.run_in_executor(None, _walk)
-    url_keys = set(url_map.keys())
-
-    only_left = local_files - url_keys
-    only_right = url_keys - local_files
-    common = sorted(local_files & url_keys)
-
-    diff: dict[str, DiffReason] = {}
-
-    if common:
-        async def _cmp_entry(rel: str) -> tuple[str, bool]:
-            local_path = os.path.join(dir_path, rel)
-            return rel, await compare(local_path, url_map[rel], **kwargs)
-
-        results = await asyncio.gather(*[_cmp_entry(r) for r in common])
-        for rel, eq in results:
-            if not eq:
-                diff[rel] = DiffReason.CONTENT_MISMATCH
-
-    equal = len(only_left) == 0 and len(only_right) == 0 and len(diff) == 0
-    return DirResult(equal=equal, diff=diff, only_left=only_left, only_right=only_right)
+    raw = await _await_task(fd, lambda: async_compare_dir_urls_result(task))
+    return _build_dir_result(raw)
 
 
 __all__ = [

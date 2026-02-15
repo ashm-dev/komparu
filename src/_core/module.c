@@ -712,6 +712,216 @@ static PyObject *py_async_compare_dir_result(PyObject *self, PyObject *arg) {
 }
 
 /* =========================================================================
+ * Async archive comparison
+ * ========================================================================= */
+
+static PyObject *py_async_compare_archive_start(PyObject *self, PyObject *args, PyObject *kwargs) {
+    (void)self;
+
+    const char *path_a = NULL;
+    const char *path_b = NULL;
+    Py_ssize_t chunk_size = KOMPARU_DEFAULT_CHUNK_SIZE;
+    long long max_decompressed_size = -1;
+    int max_compression_ratio = -1;
+    long long max_entries = -1;
+    long long max_entry_name_length = -1;
+
+    static char *kwlist[] = {
+        "path_a", "path_b", "chunk_size",
+        "max_decompressed_size", "max_compression_ratio",
+        "max_entries", "max_entry_name_length", NULL
+    };
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "ss|nLiLL", kwlist,
+            &path_a, &path_b, &chunk_size,
+            &max_decompressed_size, &max_compression_ratio,
+            &max_entries, &max_entry_name_length)) {
+        return NULL;
+    }
+
+    int64_t mds = max_decompressed_size >= 0 ? (int64_t)max_decompressed_size : 0;
+    int mcr = max_compression_ratio >= 0 ? max_compression_ratio : 0;
+    int64_t me = max_entries >= 0 ? (int64_t)max_entries : 0;
+    int64_t menl = max_entry_name_length >= 0 ? (int64_t)max_entry_name_length : 0;
+
+    const char *err_msg = NULL;
+    komparu_async_task_t *task = komparu_async_compare_archive(
+        path_a, path_b, (size_t)chunk_size,
+        mds, mcr, me, menl, &err_msg);
+
+    if (!task) {
+        PyErr_Format(PyExc_RuntimeError, "async compare_archive failed: %s",
+                     err_msg ? err_msg : "unknown error");
+        return NULL;
+    }
+
+    int fd = komparu_async_task_fd(task);
+    PyObject *capsule = PyCapsule_New(task, "komparu.async_task",
+                                      async_task_capsule_destructor);
+    if (!capsule) {
+        komparu_async_task_free(task);
+        return NULL;
+    }
+
+    return Py_BuildValue("(iN)", fd, capsule);
+}
+
+static PyObject *py_async_compare_archive_result(PyObject *self, PyObject *arg) {
+    (void)self;
+
+    komparu_async_task_t *task = PyCapsule_GetPointer(arg, "komparu.async_task");
+    if (!task) {
+        PyErr_SetString(PyExc_ValueError, "invalid async task handle");
+        return NULL;
+    }
+
+    const char *err_msg = NULL;
+    komparu_dir_result_t *result = komparu_async_task_dir_result(task, &err_msg);
+    if (!result) {
+        PyErr_Format(PyExc_IOError, "archive comparison failed: %s",
+                     err_msg ? err_msg : "unknown error");
+        return NULL;
+    }
+
+    PyObject *py_result = dir_result_to_python(result);
+    komparu_dir_result_free(result);
+    return py_result;
+}
+
+/* =========================================================================
+ * Async dir_urls comparison
+ * ========================================================================= */
+
+static PyObject *py_async_compare_dir_urls_start(PyObject *self, PyObject *args, PyObject *kwargs) {
+    (void)self;
+
+    const char *dir_path = NULL;
+    PyObject *py_url_map = NULL;
+    Py_ssize_t chunk_size = KOMPARU_DEFAULT_CHUNK_SIZE;
+    int size_precheck = 1;
+    int quick_check = 1;
+    PyObject *py_headers = Py_None;
+    double timeout = 30.0;
+    int follow_redirects = 1;
+    int verify_ssl = 1;
+    int allow_private = 0;
+
+    static char *kwlist[] = {
+        "dir_path", "url_map", "chunk_size", "size_precheck", "quick_check",
+        "headers", "timeout", "follow_redirects", "verify_ssl", "allow_private",
+        NULL
+    };
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwargs, "sO|nppOdppp", kwlist,
+            &dir_path, &py_url_map, &chunk_size, &size_precheck, &quick_check,
+            &py_headers, &timeout, &follow_redirects, &verify_ssl,
+            &allow_private)) {
+        return NULL;
+    }
+
+    if (!PyDict_Check(py_url_map)) {
+        PyErr_SetString(PyExc_TypeError, "url_map must be a dict");
+        return NULL;
+    }
+
+    if (chunk_size <= 0) {
+        PyErr_SetString(PyExc_ValueError, "chunk_size must be positive");
+        return NULL;
+    }
+
+    /* Convert url_map dict to parallel C arrays */
+    Py_ssize_t map_size = PyDict_Size(py_url_map);
+    const char **rel_paths = NULL;
+    const char **url_strs = NULL;
+
+    if (map_size > 0) {
+        rel_paths = calloc((size_t)map_size, sizeof(const char *));
+        url_strs = calloc((size_t)map_size, sizeof(const char *));
+        if (!rel_paths || !url_strs) {
+            free(rel_paths);
+            free(url_strs);
+            PyErr_NoMemory();
+            return NULL;
+        }
+
+        PyObject *key, *value;
+        Py_ssize_t pos = 0;
+        Py_ssize_t idx = 0;
+        while (PyDict_Next(py_url_map, &pos, &key, &value)) {
+            rel_paths[idx] = PyUnicode_AsUTF8(key);
+            url_strs[idx] = PyUnicode_AsUTF8(value);
+            if (!rel_paths[idx] || !url_strs[idx]) {
+                free(rel_paths);
+                free(url_strs);
+                PyErr_SetString(PyExc_TypeError, "url_map keys and values must be strings");
+                return NULL;
+            }
+            idx++;
+        }
+    }
+
+    /* Build headers */
+    const char *err_msg = NULL;
+    size_t header_count = 0;
+    const char **header_array = build_header_array(py_headers, &header_count, &err_msg);
+    if (err_msg) {
+        free(rel_paths);
+        free(url_strs);
+        PyErr_SetString(PyExc_ValueError, err_msg);
+        return NULL;
+    }
+
+    komparu_async_task_t *task = komparu_async_compare_dir_urls(
+        dir_path, rel_paths, url_strs, (size_t)map_size,
+        header_array,
+        (size_t)chunk_size, (bool)size_precheck, (bool)quick_check,
+        timeout, (bool)follow_redirects, (bool)verify_ssl, (bool)allow_private,
+        &err_msg);
+
+    free(rel_paths);
+    free(url_strs);
+    free_header_array(header_array, header_count);
+
+    if (!task) {
+        PyErr_Format(PyExc_RuntimeError, "async compare_dir_urls failed: %s",
+                     err_msg ? err_msg : "unknown error");
+        return NULL;
+    }
+
+    int fd = komparu_async_task_fd(task);
+    PyObject *capsule = PyCapsule_New(task, "komparu.async_task",
+                                      async_task_capsule_destructor);
+    if (!capsule) {
+        komparu_async_task_free(task);
+        return NULL;
+    }
+
+    return Py_BuildValue("(iN)", fd, capsule);
+}
+
+static PyObject *py_async_compare_dir_urls_result(PyObject *self, PyObject *arg) {
+    (void)self;
+
+    komparu_async_task_t *task = PyCapsule_GetPointer(arg, "komparu.async_task");
+    if (!task) {
+        PyErr_SetString(PyExc_ValueError, "invalid async task handle");
+        return NULL;
+    }
+
+    const char *err_msg = NULL;
+    komparu_dir_result_t *result = komparu_async_task_dir_result(task, &err_msg);
+    if (!result) {
+        PyErr_Format(PyExc_IOError, "dir_urls comparison failed: %s",
+                     err_msg ? err_msg : "unknown error");
+        return NULL;
+    }
+
+    PyObject *py_result = dir_result_to_python(result);
+    komparu_dir_result_free(result);
+    return py_result;
+}
+
+/* =========================================================================
  * Async HTTP — libcurl multi wrappers for asyncio integration
  * ========================================================================= */
 
@@ -957,6 +1167,34 @@ static PyMethodDef module_methods[] = {
         METH_O,
         "async_compare_dir_result(task) -> dict\n\n"
         "Get result of async directory comparison. Call after fd is readable."
+    },
+    {
+        "async_compare_archive_start",
+        (PyCFunction)(void(*)(void))py_async_compare_archive_start,
+        METH_VARARGS | METH_KEYWORDS,
+        "async_compare_archive_start(path_a, path_b, ...) -> (fd, task)\n\n"
+        "Submit async archive comparison. Returns (notification_fd, task_capsule)."
+    },
+    {
+        "async_compare_archive_result",
+        (PyCFunction)py_async_compare_archive_result,
+        METH_O,
+        "async_compare_archive_result(task) -> dict\n\n"
+        "Get result of async archive comparison. Call after fd is readable."
+    },
+    {
+        "async_compare_dir_urls_start",
+        (PyCFunction)(void(*)(void))py_async_compare_dir_urls_start,
+        METH_VARARGS | METH_KEYWORDS,
+        "async_compare_dir_urls_start(dir_path, url_map, ...) -> (fd, task)\n\n"
+        "Submit async dir-vs-URL-map comparison. Returns (notification_fd, task_capsule)."
+    },
+    {
+        "async_compare_dir_urls_result",
+        (PyCFunction)py_async_compare_dir_urls_result,
+        METH_O,
+        "async_compare_dir_urls_result(task) -> dict\n\n"
+        "Get result of async dir_urls comparison. Call after fd is readable."
     },
     {NULL, NULL, 0, NULL}
 };

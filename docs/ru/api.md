@@ -129,7 +129,7 @@ else:
 | `dir_a` | `str` | обязателен | Первая директория |
 | `dir_b` | `str` | обязателен | Вторая директория |
 | `max_workers` | `int` | `min(cpu, 8)` | Параллельные воркеры |
-| `follow_symlinks` | `bool` | `False` | Следовать символическим ссылкам |
+| `follow_symlinks` | `bool` | `True` | Следовать символическим ссылкам |
 
 ### komparu.compare_archive(archive_a, archive_b, **options) -> DirResult
 

@@ -27,37 +27,30 @@ komparu/
 │       ├── dirwalk.h
 │       ├── pool.c                # Пул потоков
 │       ├── pool.h
+│       ├── async_task.c          # Жизненный цикл async-задач (CAS, eventfd/pipe)
+│       ├── async_task.h
+│       ├── async_curl.c          # Строительные блоки libcurl multi
+│       ├── async_curl.h
 │       └── compat.h              # Макросы совместимости Python/платформ
 ├── tests/
 │   ├── conftest.py
 │   ├── test_compare_local.py
 │   ├── test_compare_http.py
-│   ├── test_compare_mixed.py
 │   ├── test_compare_dir.py
 │   ├── test_compare_archive.py
-│   ├── test_compare_many.py
+│   ├── test_parallel.py
 │   ├── test_async.py
-│   ├── test_config.py
-│   └── fixtures/                 # Тестовые файлы, архивы
+│   └── test_config.py
 ├── benchmarks/
-│   ├── bench_local.py
-│   ├── bench_http.py
-│   └── bench_parallel.py
 ├── docs/
 │   ├── en/
 │   └── ru/
-├── meson.build                   # Система сборки
-├── meson.options
+├── CMakeLists.txt                # Система сборки
 ├── pyproject.toml
 ├── LICENSE
 ├── README.md
-├── README.ru.md
-├── Dockerfile
 └── .github/
     └── workflows/
-        ├── ci.yml                # Матрица тестов
-        ├── wheels.yml            # Сборка и публикация wheels
-        └── bench.yml             # Регрессия бенчмарков
 ```
 
 ## 2. C23 ядро — диаграмма модулей
@@ -155,17 +148,27 @@ compare_dir(dir_a, dir_b):
 
 ```c
 typedef struct komparu_pool {
-    pthread_t *workers;       // Рабочие потоки
-    size_t num_workers;       // Количество воркеров
-    komparu_task_t *queue;    // Очередь задач (lock-free кольцевой буфер)
-    atomic_bool shutdown;     // Флаг завершения
+    pthread_t *threads;
+    size_t num_workers;
+    pool_task_t *queue;       // Динамический массив (FIFO, head/tail)
+    size_t queue_cap;
+    size_t queue_head;
+    size_t queue_tail;
+    size_t queue_count;
+    pthread_mutex_t mutex;
+    pthread_cond_t task_avail;
+    pthread_cond_t all_done;
+    size_t active_count;
+    bool shutdown;
 } komparu_pool_t;
 ```
 
+- Очередь задач: динамический массив с FIFO-семантикой (head/tail), защищённый mutex + condvar
 - Воркеры по умолчанию: `min(sysconf(_SC_NPROCESSORS_ONLN), 8)`
 - GIL освобождается перед отправкой работы в пул
 - Одна задача: сравнение одной пары файлов
-- Windows: `_beginthreadex` + `CRITICAL_SECTION`
+- `all_done` condvar для ожидания завершения всех задач
+- Массив автоматически расширяется при заполнении
 
 ## 7. Варианты сборки Python
 
@@ -216,31 +219,36 @@ static struct PyModuleDef_Slot module_slots[] = {
 
 Полный конвейер в C. Максимальная производительность. Один переход через FFI.
 
-### Async (komparu/aio.py → C-расширение с libcurl multi)
+### Async (komparu/aio.py → C pool + eventfd/pipe + asyncio)
 
 ```
-Вызов Python → C-расширение → libcurl multi (неблокирующий) → интеграция с asyncio event loop → возврат
+Python → async_compare_start() → C pool ставит задачу → worker (без GIL):
+    open_reader (file/HTTP) → komparu_compare → write в eventfd/pipe
+Python: asyncio.loop.add_reader(fd) → callback → async_compare_result(task)
 ```
 
-- HTTP I/O: **libcurl multi interface** — `curl_multi_socket_action()` интегрирован с asyncio через file descriptors
-- File I/O: `io_uring` (Linux) / `kqueue` (macOS) через C, неблокирующий
+- ВСЕ async-функции (`compare`, `compare_dir`, `compare_archive`, `compare_dir_urls`) используют одну схему: C pool + eventfd/pipe + `asyncio.loop.add_reader()`
+- Worker-потоки используют libcurl easy (блокирующий) — тот же I/O что и sync-путь
+- Нет `curl_multi_socket_action` интеграции (`async_curl.c` существует как строительные блоки для будущего неблокирующего HTTP, но не используется основным async API)
+- Нет `io_uring` или `kqueue` для файлового async I/O — workers используют mmap как и sync
+- Нет Python awaitable-протокола (`__await__`) — обычные `async def` + `add_reader`
+- CAS-based жизненный цикл задач: `RUNNING → DONE` или `RUNNING → ORPHANED`
 - Весь I/O в C — без Python HTTP-библиотек (без aiohttp, без aiofiles)
-- Event loop никогда не блокируется
-- C-расширение экспортирует Python awaitable-объекты (протокол `__await__`)
+- Event loop не блокируется: вычисления и I/O в worker-потоках пула, Python только получает оповещение через fd
 
-Почему раздельно: sync использует libcurl easy (блокирующий, GIL released, макс. пропускная способность).
-Async использует libcurl multi (неблокирующий, интеграция с event loop, макс. конкурентность).
-Одно C-ядро, разные стратегии I/O. Ни одна не является обёрткой другой.
+Почему раздельно: sync выполняет всё в вызывающем потоке (GIL released).
+Async отправляет задачу в C pool и возвращает управление event loop.
+Одно C-ядро, один и тот же I/O (libcurl easy, mmap). Разница — кто вызывает и как ждут результат.
 
 ## 9. Внешние зависимости
 
 | Библиотека | Назначение | Линковка |
 |------------|-----------|----------|
-| libcurl | HTTP/HTTPS — easy (sync) + multi (async) интерфейсы | Динамическая (системная) или статическая (vendored для wheels). Требуется c-ares или threaded resolver. |
+| libcurl | HTTP/HTTPS — easy интерфейс (sync и async worker-потоки) | Динамическая (системная) или статическая (vendored для wheels). Требуется c-ares или threaded resolver. |
 | libarchive | Чтение архивов (zip, tar, 7z и т.д.) | Динамическая (системная) или статическая (vendored для wheels) |
 | pthreads | Пул потоков (Linux/macOS) | Системная |
 
-Без Python HTTP/IO зависимостей. Весь I/O в C через libcurl и OS-native async (io_uring / kqueue).
+Без Python HTTP/IO зависимостей. Весь I/O в C через libcurl easy и mmap. Async через C pool + eventfd/pipe.
 
 ## 10. Матрица платформ
 
