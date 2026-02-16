@@ -35,6 +35,10 @@ class Source:
     verify_ssl: bool | None = None
     proxy: str | None = None
 
+    def __post_init__(self) -> None:
+        if not self.url:
+            raise ValueError("Source.url cannot be empty")
+
 
 @dataclass(frozen=True, slots=True)
 class DirResult:
