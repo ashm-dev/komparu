@@ -29,14 +29,25 @@ static int ensure_buffers(size_t chunk_size, void **a, void **b) {
         *b = tl_buf_b;
         return 0;
     }
+
+    /* Use temp pointers so that on OOM we don't lose the old allocation.
+     * realloc(ptr, size) may free the old block on success, so we must
+     * save the new pointer immediately — but only commit to thread-local
+     * state after BOTH allocations succeed. */
     void *na = realloc(tl_buf_a, chunk_size);
     if (!na) return -1;
-    tl_buf_a = na;
 
     void *nb = realloc(tl_buf_b, chunk_size);
-    if (!nb) return -1;
-    tl_buf_b = nb;
+    if (!nb) {
+        /* Second realloc failed. na is valid (old tl_buf_a may be freed),
+         * so save it to prevent a leak. tl_buf_b is still valid at old size.
+         * tl_buf_cap stays at old value — next call will retry. */
+        tl_buf_a = na;
+        return -1;
+    }
 
+    tl_buf_a = na;
+    tl_buf_b = nb;
     tl_buf_cap = chunk_size;
     *a = na;
     *b = nb;

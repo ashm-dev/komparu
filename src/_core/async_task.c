@@ -37,8 +37,8 @@ typedef enum {
 } komparu_async_type_t;
 
 /* Task lifecycle states (CAS transitions only):
- *   RUNNING → DONE      (worker finishes normally)
- *   RUNNING → ORPHANED  (Python discards handle before worker finishes)
+ *   RUNNING -> DONE      (worker finishes normally)
+ *   RUNNING -> ORPHANED  (Python discards handle before worker finishes)
  * Exactly one side (worker or destructor) owns the free. */
 typedef enum {
     KOMPARU_TASK_RUNNING  = 0,  /* zero-init via calloc */
@@ -298,6 +298,21 @@ static void compare_worker(void *arg) {
     komparu_async_task_t *task = (komparu_async_task_t *)arg;
     const char *err = NULL;
 
+    /* Same-file short-circuit via inode comparison */
+#ifndef KOMPARU_WINDOWS
+    if (!is_url(task->source_a) && !is_url(task->source_b)) {
+        struct stat st_a, st_b;
+        if (stat(task->source_a, &st_a) == 0 &&
+            stat(task->source_b, &st_b) == 0 &&
+            st_a.st_dev == st_b.st_dev &&
+            st_a.st_ino == st_b.st_ino) {
+            task->cmp_result = KOMPARU_EQUAL;
+            worker_finish(task);
+            return;
+        }
+    }
+#endif
+
     /* Open reader A */
     komparu_reader_t *ra;
     if (is_url(task->source_a)) {
@@ -404,6 +419,26 @@ static void compare_dir_worker(void *arg) {
 static void compare_archive_worker(void *arg) {
     komparu_async_task_t *task = (komparu_async_task_t *)arg;
     const char *err = NULL;
+
+    /* Same-archive short-circuit via inode comparison */
+#ifndef KOMPARU_WINDOWS
+    {
+        struct stat st_a, st_b;
+        if (stat(task->source_a, &st_a) == 0 &&
+            stat(task->source_b, &st_b) == 0 &&
+            st_a.st_dev == st_b.st_dev &&
+            st_a.st_ino == st_b.st_ino) {
+            task->dir_result = komparu_dir_result_new();
+            if (!task->dir_result) {
+                snprintf(task->error_buf, sizeof(task->error_buf),
+                         "out of memory");
+                task->has_error = true;
+            }
+            worker_finish(task);
+            return;
+        }
+    }
+#endif
 
     if (task->hash_compare) {
         task->dir_result = komparu_compare_archives_hashed(
@@ -840,7 +875,7 @@ void komparu_async_cleanup(void) {
     G_POOL_UNLOCK();
 
     if (pool) {
-        komparu_pool_wait(pool);
+        (void)komparu_pool_wait(pool);
         komparu_pool_destroy(pool);
     }
 }

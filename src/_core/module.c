@@ -198,6 +198,24 @@ static PyObject *py_compare(PyObject *self, PyObject *args, PyObject *kwargs) {
     KOMPARU_GIL_STATE_DECL
     KOMPARU_GIL_RELEASE()
 
+    /* Same-file short-circuit: if both are local files with same (dev, ino),
+     * they are identical — no I/O needed. Covers same path, hard links,
+     * symlinks to same target. */
+#ifndef KOMPARU_WINDOWS
+    if (!src_a_is_url && !src_b_is_url) {
+        struct stat st_a, st_b;
+        if (stat(src_a, &st_a) == 0 && stat(src_b, &st_b) == 0 &&
+            st_a.st_dev == st_b.st_dev && st_a.st_ino == st_b.st_ino) {
+            free_header_array(header_array, header_count);
+            free(proxy_copy);
+            KOMPARU_GIL_ACQUIRE()
+            free(src_a);
+            free(src_b);
+            Py_RETURN_TRUE;
+        }
+    }
+#endif
+
     reader_a = open_reader(
         src_a, header_array, timeout, follow_redirects, verify_ssl, allow_private, proxy_copy, &err_msg
     );
@@ -492,6 +510,27 @@ static PyObject *py_compare_archive(PyObject *self, PyObject *args, PyObject *kw
 
     KOMPARU_GIL_STATE_DECL
     KOMPARU_GIL_RELEASE()
+
+    /* Same-archive short-circuit via inode comparison */
+#ifndef KOMPARU_WINDOWS
+    {
+        struct stat st_a, st_b;
+        if (stat(pa, &st_a) == 0 && stat(pb, &st_b) == 0 &&
+            st_a.st_dev == st_b.st_dev && st_a.st_ino == st_b.st_ino) {
+            free(pa);
+            free(pb);
+            komparu_dir_result_t *r = komparu_dir_result_new();
+            KOMPARU_GIL_ACQUIRE()
+            if (KOMPARU_UNLIKELY(!r)) {
+                PyErr_NoMemory();
+                return NULL;
+            }
+            PyObject *py_r = dir_result_to_python(r);
+            komparu_dir_result_free(r);
+            return py_r;
+        }
+    }
+#endif
 
     if (hash_compare) {
         result = komparu_compare_archives_hashed(pa, pb,

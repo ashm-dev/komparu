@@ -17,6 +17,9 @@
 #include <string.h>
 #ifdef KOMPARU_WINDOWS
 #include <process.h>  /* _beginthreadex */
+#else
+#include <time.h>     /* clock_gettime, struct timespec */
+#include <errno.h>    /* ETIMEDOUT */
 #endif
 
 /* =========================================================================
@@ -276,19 +279,44 @@ int komparu_pool_submit(komparu_pool_t *pool, komparu_task_fn fn, void *arg) {
     return 0;
 }
 
-void komparu_pool_wait(komparu_pool_t *pool) {
+int komparu_pool_wait(komparu_pool_t *pool) {
     POOL_LOCK(pool);
+
+#ifdef KOMPARU_WINDOWS
+    /* Windows: use SleepConditionVariableCS with timeout in milliseconds */
     while (pool->queue_count > 0 || pool->active_count > 0) {
-        POOL_COND_WAIT(all_done, pool);
+        DWORD timeout_ms = KOMPARU_POOL_WAIT_TIMEOUT_SEC * 1000;
+        if (!SleepConditionVariableCS(&pool->all_done, &pool->mutex, timeout_ms)) {
+            if (GetLastError() == ERROR_TIMEOUT) {
+                POOL_UNLOCK(pool);
+                return -1;
+            }
+        }
     }
+#else
+    /* POSIX: use pthread_cond_timedwait with absolute deadline */
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += KOMPARU_POOL_WAIT_TIMEOUT_SEC;
+
+    while (pool->queue_count > 0 || pool->active_count > 0) {
+        int rc = pthread_cond_timedwait(&pool->all_done, &pool->mutex, &deadline);
+        if (rc == ETIMEDOUT) {
+            POOL_UNLOCK(pool);
+            return -1;
+        }
+    }
+#endif
+
     POOL_UNLOCK(pool);
+    return 0;
 }
 
 void komparu_pool_destroy(komparu_pool_t *pool) {
     if (!pool) return;
 
-    /* Wait for pending tasks */
-    komparu_pool_wait(pool);
+    /* Wait for pending tasks (ignore timeout — proceed with shutdown) */
+    (void)komparu_pool_wait(pool);
 
     /* Signal shutdown */
     POOL_LOCK(pool);

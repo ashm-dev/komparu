@@ -10,6 +10,9 @@
 
 #include "compat.h"
 
+/* Default timeout for pool_wait (seconds) */
+#define KOMPARU_POOL_WAIT_TIMEOUT_SEC 60
+
 /* Forward declaration */
 typedef struct komparu_pool komparu_pool_t;
 
@@ -33,8 +36,10 @@ int komparu_pool_submit(komparu_pool_t *pool, komparu_task_fn fn, void *arg);
 
 /**
  * Wait for all submitted tasks to complete.
+ *
+ * Returns 0 on success, -1 on timeout (KOMPARU_POOL_WAIT_TIMEOUT_SEC seconds).
  */
-void komparu_pool_wait(komparu_pool_t *pool);
+int komparu_pool_wait(komparu_pool_t *pool);
 
 /**
  * Destroy the pool. Waits for pending tasks, then joins all threads.

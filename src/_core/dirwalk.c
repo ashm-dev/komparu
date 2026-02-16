@@ -230,6 +230,18 @@ static void dir_cmp_task_exec(void *arg) {
     dir_cmp_task_t *task = (dir_cmp_task_t *)arg;
     task->result_reason = -1;  /* assume equal */
 
+    /* Same-file short-circuit via inode comparison */
+#ifndef KOMPARU_WINDOWS
+    {
+        struct stat sa, sb;
+        if (stat(task->full_path_a, &sa) == 0 &&
+            stat(task->full_path_b, &sb) == 0 &&
+            sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino) {
+            return;  /* same file — equal */
+        }
+    }
+#endif
+
     const char *cmp_err = NULL;
     komparu_reader_t *ra = komparu_reader_file_open(task->full_path_a, &cmp_err);
     if (KOMPARU_UNLIKELY(!ra)) {
@@ -295,6 +307,19 @@ komparu_dir_result_t *komparu_compare_dirs(
     size_t max_workers,
     const char **err_msg
 ) {
+    /* Same-directory short-circuit: realpath both, compare strings.
+     * Catches identical paths, symlinks, and trailing-slash variants. */
+    char real_a[PATH_MAX], real_b[PATH_MAX];
+    if (realpath(dir_a, real_a) && realpath(dir_b, real_b) &&
+        strcmp(real_a, real_b) == 0) {
+        komparu_dir_result_t *r = komparu_dir_result_new();
+        if (KOMPARU_UNLIKELY(!r)) {
+            *err_msg = "out of memory";
+            return NULL;
+        }
+        return r;  /* equal=true, empty diff/only_left/only_right */
+    }
+
     komparu_pathlist_t paths_a = {0};
     komparu_pathlist_t paths_b = {0};
 
@@ -412,7 +437,7 @@ komparu_dir_result_t *komparu_compare_dirs(
             for (size_t k = 0; k < task_count; k++) {
                 if (KOMPARU_UNLIKELY(komparu_pool_submit(pool, dir_cmp_task_exec, &tasks[k]) != 0)) {
                     /* Submit failed — execute remaining tasks inline */
-                    komparu_pool_wait(pool);
+                    (void)komparu_pool_wait(pool);
                     komparu_pool_destroy(pool);
                     for (size_t m = k; m < task_count; m++)
                         dir_cmp_task_exec(&tasks[m]);
@@ -420,7 +445,7 @@ komparu_dir_result_t *komparu_compare_dirs(
                     break;
                 }
             }
-            komparu_pool_wait(pool);
+            (void)komparu_pool_wait(pool);
             komparu_pool_destroy(pool);
         } else {
             for (size_t k = 0; k < task_count; k++) {
