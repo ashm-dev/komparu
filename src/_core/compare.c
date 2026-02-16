@@ -258,6 +258,9 @@ void komparu_dir_result_free(komparu_dir_result_t *r) {
     for (size_t i = 0; i < r->only_right_count; i++)
         free(r->only_right[i]);
     free(r->only_right);
+    for (size_t i = 0; i < r->error_count; i++)
+        free(r->errors[i]);
+    free(r->errors);
     free(r);
 }
 
@@ -304,5 +307,19 @@ int komparu_dir_result_add_only_right(komparu_dir_result_t *r, const char *path)
     if (!r->only_right[r->only_right_count]) return -1;
     r->only_right_count++;
     r->equal = false;
+    return 0;
+}
+
+int komparu_dir_result_add_error(komparu_dir_result_t *r, const char *path) {
+    if (r->error_count >= r->error_cap) {
+        size_t new_cap = r->error_cap ? r->error_cap * 2 : 64;
+        char **tmp = realloc(r->errors, new_cap * sizeof(char *));
+        if (!tmp) return -1;
+        r->errors = tmp;
+        r->error_cap = new_cap;
+    }
+    r->errors[r->error_count] = strdup(path);
+    if (!r->errors[r->error_count]) return -1;
+    r->error_count++;
     return 0;
 }

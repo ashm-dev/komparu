@@ -106,6 +106,103 @@ void komparu_pathlist_free(komparu_pathlist_t *list) {
 }
 
 /* =========================================================================
+ * Visited-directory set — (dev, ino) hash set for symlink loop detection
+ * ========================================================================= */
+
+typedef struct {
+    dev_t dev;
+    ino_t ino;
+} devino_t;
+
+typedef struct {
+    devino_t *slots;    /* open-addressing table */
+    size_t    capacity; /* always a power of 2 */
+    size_t    count;    /* number of occupied slots */
+} devino_set_t;
+
+#define DEVINO_SET_INIT_CAP 64  /* handles typical trees without rehash */
+
+static int devino_set_init(devino_set_t *set) {
+    set->slots = calloc(DEVINO_SET_INIT_CAP, sizeof(devino_t));
+    if (KOMPARU_UNLIKELY(!set->slots)) return -1;
+    set->capacity = DEVINO_SET_INIT_CAP;
+    set->count = 0;
+    return 0;
+}
+
+static void devino_set_free(devino_set_t *set) {
+    free(set->slots);
+    set->slots = NULL;
+    set->capacity = 0;
+    set->count = 0;
+}
+
+static inline uint64_t devino_hash(dev_t dev, ino_t ino) {
+    /* Mix dev and ino — splitmix64-style finalizer */
+    uint64_t h = (uint64_t)dev * 0x9E3779B97F4A7C15ULL ^ (uint64_t)ino;
+    h = (h ^ (h >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    h = (h ^ (h >> 27)) * 0x94D049BB133111EBULL;
+    return h ^ (h >> 31);
+}
+
+/* Insert into table (no duplicate check, used during rehash). */
+static void devino_set_insert_raw(devino_t *slots, size_t mask,
+                                  dev_t dev, ino_t ino) {
+    size_t idx = devino_hash(dev, ino) & mask;
+    while (slots[idx].dev != 0 || slots[idx].ino != 0)
+        idx = (idx + 1) & mask;
+    slots[idx].dev = dev;
+    slots[idx].ino = ino;
+}
+
+static int devino_set_grow(devino_set_t *set) {
+    size_t new_cap = set->capacity * 2;
+    devino_t *new_slots = calloc(new_cap, sizeof(devino_t));
+    if (KOMPARU_UNLIKELY(!new_slots)) return -1;
+    size_t new_mask = new_cap - 1;
+    for (size_t i = 0; i < set->capacity; i++) {
+        if (set->slots[i].dev != 0 || set->slots[i].ino != 0)
+            devino_set_insert_raw(new_slots, new_mask,
+                                  set->slots[i].dev, set->slots[i].ino);
+    }
+    free(set->slots);
+    set->slots = new_slots;
+    set->capacity = new_cap;
+    return 0;
+}
+
+/**
+ * Check if (dev, ino) is already in the set.
+ * If not, insert it.
+ * Returns: true if already present (loop detected), false if newly inserted.
+ * Returns -1 on allocation failure.
+ */
+static int devino_set_check_and_add(devino_set_t *set, dev_t dev, ino_t ino) {
+    size_t mask = set->capacity - 1;
+    size_t idx = devino_hash(dev, ino) & mask;
+    while (set->slots[idx].dev != 0 || set->slots[idx].ino != 0) {
+        if (set->slots[idx].dev == dev && set->slots[idx].ino == ino)
+            return 1;  /* already visited — loop */
+        idx = (idx + 1) & mask;
+    }
+    /* Not found — insert */
+    /* Grow at 75% load factor */
+    if (set->count * 4 >= set->capacity * 3) {
+        if (KOMPARU_UNLIKELY(devino_set_grow(set) != 0))
+            return -1;
+        /* Recompute insertion point after rehash */
+        mask = set->capacity - 1;
+        idx = devino_hash(dev, ino) & mask;
+        while (set->slots[idx].dev != 0 || set->slots[idx].ino != 0)
+            idx = (idx + 1) & mask;
+    }
+    set->slots[idx].dev = dev;
+    set->slots[idx].ino = ino;
+    set->count++;
+    return 0;  /* newly inserted */
+}
+
+/* =========================================================================
  * Recursive walker — uses fd-relative operations for performance
  * ========================================================================= */
 
@@ -119,7 +216,9 @@ static int walk_recursive(
     const char *rel_prefix, /* "" for root */
     int stat_flags,
     int depth,
+    devino_set_t *visited,  /* tracks visited directories for loop detection */
     komparu_pathlist_t *result,
+    komparu_pathlist_t *errors,  /* NULL = ignore permission errors */
     const char **err_msg
 ) {
     if (KOMPARU_UNLIKELY(depth > KOMPARU_MAX_WALK_DEPTH)) {
@@ -148,8 +247,25 @@ static int walk_recursive(
         }
 
         struct stat st;
-        if (KOMPARU_UNLIKELY(fstatat(dfd, name, &st, stat_flags) != 0))
+        if (KOMPARU_UNLIKELY(fstatat(dfd, name, &st, stat_flags) != 0)) {
+            if (errors && (errno == EACCES || errno == EPERM)) {
+                /* Build relative path for the error entry */
+                char err_path[PATH_MAX];
+                int elen;
+                if (rel_prefix[0]) {
+                    elen = snprintf(err_path, sizeof(err_path), "%s/%s", rel_prefix, name);
+                } else {
+                    elen = snprintf(err_path, sizeof(err_path), "%s", name);
+                }
+                if (elen >= 0 && (size_t)elen < sizeof(err_path)) {
+                    if (KOMPARU_UNLIKELY(pathlist_append(errors, err_path, err_msg) != 0)) {
+                        closedir(dir);
+                        return -1;
+                    }
+                }
+            }
             continue;
+        }
 
         /* Build relative path */
         char rel_path[PATH_MAX];
@@ -169,9 +285,36 @@ static int walk_recursive(
             }
         } else if (S_ISDIR(st.st_mode)) {
             int sub_fd = openat(dfd, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-            if (KOMPARU_UNLIKELY(sub_fd < 0)) continue;
+            if (KOMPARU_UNLIKELY(sub_fd < 0)) {
+                if (errors && (errno == EACCES || errno == EPERM)) {
+                    if (KOMPARU_UNLIKELY(pathlist_append(errors, rel_path, err_msg) != 0)) {
+                        closedir(dir);
+                        return -1;
+                    }
+                }
+                continue;
+            }
 
-            if (KOMPARU_UNLIKELY(walk_recursive(sub_fd, rel_path, stat_flags, depth + 1, result, err_msg) != 0)) {
+            /* Symlink loop detection: check (dev, ino) of this directory */
+            struct stat dir_st;
+            if (KOMPARU_UNLIKELY(fstat(sub_fd, &dir_st) != 0)) {
+                close(sub_fd);
+                continue;
+            }
+            int vis = devino_set_check_and_add(visited, dir_st.st_dev, dir_st.st_ino);
+            if (vis == 1) {
+                /* Already visited — symlink loop, skip silently */
+                close(sub_fd);
+                continue;
+            }
+            if (KOMPARU_UNLIKELY(vis < 0)) {
+                close(sub_fd);
+                closedir(dir);
+                *err_msg = "out of memory";
+                return -1;
+            }
+
+            if (KOMPARU_UNLIKELY(walk_recursive(sub_fd, rel_path, stat_flags, depth + 1, visited, result, errors, err_msg) != 0)) {
                 closedir(dir);
                 return -1;
             }
@@ -186,9 +329,11 @@ int komparu_dirwalk(
     const char *base_dir,
     bool follow_symlinks,
     komparu_pathlist_t *result,
+    komparu_pathlist_t *errors,
     const char **err_msg
 ) {
     memset(result, 0, sizeof(*result));
+    if (errors) memset(errors, 0, sizeof(*errors));
 
     int fd = open(base_dir, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (KOMPARU_UNLIKELY(fd < 0)) {
@@ -197,12 +342,35 @@ int komparu_dirwalk(
         return -1;
     }
 
-    int stat_flags = follow_symlinks ? 0 : AT_SYMLINK_NOFOLLOW;
-
-    if (KOMPARU_UNLIKELY(walk_recursive(fd, "", stat_flags, 0, result, err_msg) != 0)) {
-        komparu_pathlist_free(result);
+    /* Initialize visited set for symlink loop detection */
+    devino_set_t visited;
+    if (KOMPARU_UNLIKELY(devino_set_init(&visited) != 0)) {
+        close(fd);
+        *err_msg = "out of memory";
         return -1;
     }
+
+    /* Register the root directory so we detect cycles back to it */
+    struct stat root_st;
+    if (KOMPARU_UNLIKELY(fstat(fd, &root_st) != 0)) {
+        komparu_strerror(errno, dirwalk_errbuf, sizeof(dirwalk_errbuf));
+        *err_msg = dirwalk_errbuf;
+        devino_set_free(&visited);
+        close(fd);
+        return -1;
+    }
+    devino_set_check_and_add(&visited, root_st.st_dev, root_st.st_ino);
+
+    int stat_flags = follow_symlinks ? 0 : AT_SYMLINK_NOFOLLOW;
+
+    if (KOMPARU_UNLIKELY(walk_recursive(fd, "", stat_flags, 0, &visited, result, errors, err_msg) != 0)) {
+        devino_set_free(&visited);
+        komparu_pathlist_free(result);
+        if (errors) komparu_pathlist_free(errors);
+        return -1;
+    }
+
+    devino_set_free(&visited);
 
     /* Sort for deterministic merge comparison */
     if (result->count > 1) {
@@ -322,13 +490,16 @@ komparu_dir_result_t *komparu_compare_dirs(
 
     komparu_pathlist_t paths_a = {0};
     komparu_pathlist_t paths_b = {0};
+    komparu_pathlist_t errors_a = {0};
+    komparu_pathlist_t errors_b = {0};
 
-    if (komparu_dirwalk(dir_a, follow_symlinks, &paths_a, err_msg) != 0) {
+    if (komparu_dirwalk(dir_a, follow_symlinks, &paths_a, &errors_a, err_msg) != 0) {
         return NULL;
     }
 
-    if (komparu_dirwalk(dir_b, follow_symlinks, &paths_b, err_msg) != 0) {
+    if (komparu_dirwalk(dir_b, follow_symlinks, &paths_b, &errors_b, err_msg) != 0) {
         komparu_pathlist_free(&paths_a);
+        komparu_pathlist_free(&errors_a);
         return NULL;
     }
 
@@ -337,8 +508,36 @@ komparu_dir_result_t *komparu_compare_dirs(
         *err_msg = "out of memory";
         komparu_pathlist_free(&paths_a);
         komparu_pathlist_free(&paths_b);
+        komparu_pathlist_free(&errors_a);
+        komparu_pathlist_free(&errors_b);
         return NULL;
     }
+
+    /* Merge permission errors from both walks into the result */
+    for (size_t k = 0; k < errors_a.count; k++) {
+        if (KOMPARU_UNLIKELY(komparu_dir_result_add_error(result, errors_a.paths[k]) != 0)) {
+            *err_msg = "out of memory";
+            komparu_pathlist_free(&paths_a);
+            komparu_pathlist_free(&paths_b);
+            komparu_pathlist_free(&errors_a);
+            komparu_pathlist_free(&errors_b);
+            komparu_dir_result_free(result);
+            return NULL;
+        }
+    }
+    for (size_t k = 0; k < errors_b.count; k++) {
+        if (KOMPARU_UNLIKELY(komparu_dir_result_add_error(result, errors_b.paths[k]) != 0)) {
+            *err_msg = "out of memory";
+            komparu_pathlist_free(&paths_a);
+            komparu_pathlist_free(&paths_b);
+            komparu_pathlist_free(&errors_a);
+            komparu_pathlist_free(&errors_b);
+            komparu_dir_result_free(result);
+            return NULL;
+        }
+    }
+    komparu_pathlist_free(&errors_a);
+    komparu_pathlist_free(&errors_b);
 
     if (chunk_size == 0) chunk_size = KOMPARU_DEFAULT_CHUNK_SIZE;
 
@@ -512,7 +711,8 @@ komparu_dir_result_t *komparu_compare_dir_urls(
 
     /* Walk local directory */
     komparu_pathlist_t local_paths = {0};
-    if (komparu_dirwalk(dir_path, true, &local_paths, err_msg) != 0) {
+    komparu_pathlist_t local_errors = {0};
+    if (komparu_dirwalk(dir_path, true, &local_paths, &local_errors, err_msg) != 0) {
         return NULL;
     }
 
@@ -522,6 +722,7 @@ komparu_dir_result_t *komparu_compare_dir_urls(
         url_order = malloc(url_count * sizeof(size_t));
         if (KOMPARU_UNLIKELY(!url_order)) {
             komparu_pathlist_free(&local_paths);
+            komparu_pathlist_free(&local_errors);
             *err_msg = "out of memory";
             return NULL;
         }
@@ -543,10 +744,24 @@ komparu_dir_result_t *komparu_compare_dir_urls(
     komparu_dir_result_t *result = komparu_dir_result_new();
     if (KOMPARU_UNLIKELY(!result)) {
         komparu_pathlist_free(&local_paths);
+        komparu_pathlist_free(&local_errors);
         free(url_order);
         *err_msg = "out of memory";
         return NULL;
     }
+
+    /* Merge permission errors into result */
+    for (size_t k = 0; k < local_errors.count; k++) {
+        if (KOMPARU_UNLIKELY(komparu_dir_result_add_error(result, local_errors.paths[k]) != 0)) {
+            komparu_pathlist_free(&local_paths);
+            komparu_pathlist_free(&local_errors);
+            free(url_order);
+            komparu_dir_result_free(result);
+            *err_msg = "out of memory";
+            return NULL;
+        }
+    }
+    komparu_pathlist_free(&local_errors);
 
     /* Sorted merge: local_paths (already sorted) vs url_order */
     size_t li = 0, ui = 0;

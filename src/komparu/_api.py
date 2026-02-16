@@ -9,7 +9,7 @@ from komparu._core import compare_dir as _compare_dir_c
 from komparu._core import compare_archive as _compare_archive_c
 from komparu._core import compare_dir_urls as _compare_dir_urls_c
 from komparu._validate import validate_path, validate_chunk_size, validate_timeout, validate_max_workers
-from komparu._helpers import resolve_headers, build_dir_result
+from komparu._helpers import resolve_headers, build_dir_result, filter_dir_result
 
 from komparu._types import DirResult  # noqa: F401 — re-export for type annotations
 
@@ -81,6 +81,7 @@ def compare_dir(
     quick_check: bool = True,
     follow_symlinks: bool = True,
     max_workers: int = 0,
+    ignore: list[str] | None = None,
 ) -> DirResult:
     """Compare two directories recursively.
 
@@ -91,6 +92,7 @@ def compare_dir(
     :param quick_check: Sample key offsets before full scan.
     :param follow_symlinks: Follow symbolic links during traversal.
     :param max_workers: Thread pool size (0=auto, 1=sequential).
+    :param ignore: Glob patterns to exclude (matched per path component).
     :returns: DirResult with equal, diff, only_left, only_right.
     """
     validate_path(dir_a, "dir_a")
@@ -106,7 +108,10 @@ def compare_dir(
         follow_symlinks=follow_symlinks,
         max_workers=max_workers,
     )
-    return build_dir_result(raw)
+    result = build_dir_result(raw)
+    if ignore:
+        result = filter_dir_result(result, ignore)
+    return result
 
 
 def compare_archive(

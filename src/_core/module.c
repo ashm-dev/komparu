@@ -259,6 +259,13 @@ done:
 
     KOMPARU_GIL_ACQUIRE()
 
+    /* Check for pending signals (e.g., Ctrl+C) raised while GIL was released */
+    if (PyErr_CheckSignals() < 0) {
+        free(src_a);
+        free(src_b);
+        return NULL;
+    }
+
     /* Convert result to Python */
     switch (result) {
         case KOMPARU_EQUAL:
@@ -386,6 +393,26 @@ static PyObject *dir_result_to_python(komparu_dir_result_t *r) {
         Py_DECREF(or_set);
     }
 
+    /* errors: set[str] — paths skipped due to permission denied */
+    {
+        PyObject *err_set = PySet_New(NULL);
+        if (!err_set) goto fail;
+        for (size_t i = 0; i < r->error_count; i++) {
+            PyObject *s = PyUnicode_FromString(r->errors[i]);
+            if (!s || PySet_Add(err_set, s) < 0) {
+                Py_XDECREF(s);
+                Py_DECREF(err_set);
+                goto fail;
+            }
+            Py_DECREF(s);
+        }
+        if (PyDict_SetItemString(dict, "errors", err_set) < 0) {
+            Py_DECREF(err_set);
+            goto fail;
+        }
+        Py_DECREF(err_set);
+    }
+
     return dict;
 
 fail:
@@ -449,6 +476,12 @@ static PyObject *py_compare_dir(PyObject *self, PyObject *args, PyObject *kwargs
 
     free(da);
     free(db);
+
+    /* Check for pending signals (e.g., Ctrl+C) raised while GIL was released */
+    if (PyErr_CheckSignals() < 0) {
+        if (result) komparu_dir_result_free(result);
+        return NULL;
+    }
 
     if (!result) {
         PyErr_Format(PyExc_IOError, "directory comparison failed: %s",
@@ -544,6 +577,12 @@ static PyObject *py_compare_archive(PyObject *self, PyObject *args, PyObject *kw
 
     free(pa);
     free(pb);
+
+    /* Check for pending signals (e.g., Ctrl+C) raised while GIL was released */
+    if (PyErr_CheckSignals() < 0) {
+        if (result) komparu_dir_result_free(result);
+        return NULL;
+    }
 
     if (!result) {
         PyErr_Format(PyExc_IOError, "archive comparison failed: %s",
@@ -719,6 +758,12 @@ static PyObject *py_compare_dir_urls(PyObject *self, PyObject *args, PyObject *k
     free(rel_paths);
     free(url_strs);
     free_header_array(header_array, header_count);
+
+    /* Check for pending signals (e.g., Ctrl+C) raised while GIL was released */
+    if (PyErr_CheckSignals() < 0) {
+        if (result) komparu_dir_result_free(result);
+        return NULL;
+    }
 
     if (!result) {
         PyErr_Format(PyExc_IOError, "dir_urls comparison failed: %s",

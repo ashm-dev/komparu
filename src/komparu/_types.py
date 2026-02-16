@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 
@@ -48,12 +48,14 @@ class DirResult:
     :param diff: Files with different content, keyed by relative path.
     :param only_left: Files only in the first source.
     :param only_right: Files only in the second source.
+    :param errors: Paths skipped due to permission denied (EACCES/EPERM).
     """
 
     equal: bool
     diff: dict[str, DiffReason]
     only_left: set[str]
     only_right: set[str]
+    errors: set[str] = field(default_factory=set)
 
 
 @dataclass(frozen=True, slots=True)

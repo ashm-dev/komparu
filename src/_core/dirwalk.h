@@ -47,6 +47,9 @@ typedef struct {
  * base_dir: root directory to walk.
  * follow_symlinks: if true, follow symbolic links.
  * result: output path list (caller must free with komparu_pathlist_free).
+ * errors: if non-NULL, paths that could not be stat'd due to permission
+ *         denied (EACCES/EPERM) are appended here instead of silently skipped.
+ *         Caller must free with komparu_pathlist_free.
  *
  * Returns 0 on success, -1 on error.
  */
@@ -54,6 +57,7 @@ int komparu_dirwalk(
     const char *base_dir,
     bool follow_symlinks,
     komparu_pathlist_t *result,
+    komparu_pathlist_t *errors,
     const char **err_msg
 );
 

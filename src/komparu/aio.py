@@ -32,7 +32,7 @@ from komparu._core import (
 )
 from komparu._types import CompareResult, DirResult, Source
 from komparu._validate import validate_path, validate_chunk_size, validate_timeout, validate_max_workers
-from komparu._helpers import build_dir_result
+from komparu._helpers import build_dir_result, filter_dir_result
 
 
 def _source_path(source: str | Source) -> str:
@@ -127,6 +127,7 @@ async def compare_dir(
     quick_check: bool = True,
     follow_symlinks: bool = True,
     max_workers: int = 0,
+    ignore: list[str] | None = None,
 ) -> DirResult:
     """Compare two directories recursively (async).
 
@@ -134,6 +135,7 @@ async def compare_dir(
 
     :param dir_a: Path to first directory.
     :param dir_b: Path to second directory.
+    :param ignore: Glob patterns to exclude (matched per path component).
     :returns: DirResult with equal, diff, only_left, only_right.
     """
     validate_path(dir_a, "dir_a")
@@ -151,7 +153,10 @@ async def compare_dir(
     )
 
     raw = await _await_task(fd, lambda: async_compare_dir_result(task))
-    return build_dir_result(raw)
+    result = build_dir_result(raw)
+    if ignore:
+        result = filter_dir_result(result, ignore)
+    return result
 
 
 async def compare_archive(

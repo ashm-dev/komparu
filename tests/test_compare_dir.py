@@ -490,3 +490,242 @@ class TestSpecialCharPaths:
         assert "diff [v1].txt" in result.diff
         assert result.only_left == {"only_a!.txt"}
         assert result.only_right == {"only_b@.txt"}
+
+
+# ---- Ignore patterns ----
+
+
+class TestIgnorePatterns:
+    """Test the ignore parameter for filtering directory comparison results."""
+
+    def test_ignore_file_extension(self, make_dir):
+        """Ignoring *.pyc filters out .pyc files from all categories."""
+        a = make_dir("a", {
+            "main.py": b"print('hello')",
+            "main.pyc": b"\x00bytecode_a",
+            "util.pyc": b"\x00bytecode_util",
+        })
+        b = make_dir("b", {
+            "main.py": b"print('hello')",
+            "main.pyc": b"\x00bytecode_b",
+        })
+        # Without ignore: main.pyc differs, util.pyc only in a
+        result = komparu.compare_dir(str(a), str(b))
+        assert result.equal is False
+        assert "main.pyc" in result.diff
+        assert "util.pyc" in result.only_left
+
+        # With ignore: .pyc files are excluded, only main.py remains (equal)
+        result = komparu.compare_dir(str(a), str(b), ignore=["*.pyc"])
+        assert result.equal is True
+        assert "main.pyc" not in result.diff
+        assert "util.pyc" not in result.only_left
+
+    def test_ignore_directory_name(self, make_dir):
+        """Ignoring a directory name filters entries under that directory."""
+        a = make_dir("a", {
+            "src/app.py": b"app code",
+            "__pycache__/app.cpython-312.pyc": b"\x00cache_a",
+            "sub/__pycache__/mod.cpython-312.pyc": b"\x00mod_a",
+        })
+        b = make_dir("b", {
+            "src/app.py": b"app code",
+            "__pycache__/app.cpython-312.pyc": b"\x00cache_b",
+        })
+        result = komparu.compare_dir(str(a), str(b), ignore=["__pycache__"])
+        assert result.equal is True
+        assert not any("__pycache__" in k for k in result.diff)
+        assert not any("__pycache__" in p for p in result.only_left)
+        assert not any("__pycache__" in p for p in result.only_right)
+
+    def test_nonmatching_files_still_compared(self, make_dir):
+        """Files not matching any ignore pattern are still compared."""
+        a = make_dir("a", {
+            "readme.md": b"# Hello",
+            "data.csv": b"a,b,c",
+            "cache.pyc": b"\x00cache",
+        })
+        b = make_dir("b", {
+            "readme.md": b"# World",
+            "data.csv": b"a,b,c",
+            "cache.pyc": b"\x00different",
+        })
+        result = komparu.compare_dir(str(a), str(b), ignore=["*.pyc"])
+        # cache.pyc difference is ignored, but readme.md differs
+        assert result.equal is False
+        assert "readme.md" in result.diff
+        assert "cache.pyc" not in result.diff
+
+    def test_empty_ignore_list(self, make_dir):
+        """An empty ignore list has no effect."""
+        a = make_dir("a", {"file.txt": b"hello", "extra.txt": b"extra"})
+        b = make_dir("b", {"file.txt": b"hello"})
+        result_no_ignore = komparu.compare_dir(str(a), str(b))
+        result_empty = komparu.compare_dir(str(a), str(b), ignore=[])
+        assert result_no_ignore.equal == result_empty.equal
+        assert result_no_ignore.diff == result_empty.diff
+        assert result_no_ignore.only_left == result_empty.only_left
+        assert result_no_ignore.only_right == result_empty.only_right
+
+    def test_none_ignore(self, make_dir):
+        """None ignore (the default) has no effect."""
+        a = make_dir("a", {"file.txt": b"hello", "extra.txt": b"extra"})
+        b = make_dir("b", {"file.txt": b"hello"})
+        result_default = komparu.compare_dir(str(a), str(b))
+        result_none = komparu.compare_dir(str(a), str(b), ignore=None)
+        assert result_default.equal == result_none.equal
+        assert result_default.diff == result_none.diff
+        assert result_default.only_left == result_none.only_left
+        assert result_default.only_right == result_none.only_right
+
+    def test_multiple_patterns(self, make_dir):
+        """Multiple ignore patterns filter cumulatively."""
+        a = make_dir("a", {
+            "app.py": b"code",
+            "app.pyc": b"\x00bytecode",
+            ".git/config": b"gitconfig",
+            "node_modules/pkg/index.js": b"js",
+        })
+        b = make_dir("b", {
+            "app.py": b"code",
+        })
+        result = komparu.compare_dir(
+            str(a), str(b),
+            ignore=["*.pyc", ".git", "node_modules"],
+        )
+        assert result.equal is True
+        assert result.only_left == set()
+
+    def test_ignore_only_right(self, make_dir):
+        """Ignore patterns filter only_right entries too."""
+        a = make_dir("a", {"src/main.py": b"code"})
+        b = make_dir("b", {
+            "src/main.py": b"code",
+            "build/output.o": b"\x00obj",
+            "build/output.bin": b"\x00bin",
+        })
+        result = komparu.compare_dir(str(a), str(b), ignore=["build"])
+        assert result.equal is True
+        assert result.only_right == set()
+
+    def test_ignore_pattern_matches_nested_component(self, make_dir):
+        """A pattern matching a nested path component filters the entry."""
+        a = make_dir("a", {
+            "src/app.py": b"code",
+            "src/.cache/data.bin": b"\x00cached",
+            "top/.cache/index": b"\x00top_cached",
+        })
+        b = make_dir("b", {
+            "src/app.py": b"code",
+        })
+        result = komparu.compare_dir(str(a), str(b), ignore=[".cache"])
+        assert result.equal is True
+        assert result.only_left == set()
+
+
+# ---- Permission denied errors ----
+
+
+class TestPermissionDeniedErrors:
+    """Permission denied directories/files are reported in errors."""
+
+    def test_no_errors_when_all_readable(self, make_dir):
+        """No errors when all files are readable."""
+        a = make_dir("a", {"file.txt": b"data"})
+        b = make_dir("b", {"file.txt": b"data"})
+        result = komparu.compare_dir(str(a), str(b))
+        assert result.errors == set()
+        assert result.equal is True
+
+    def test_errors_field_default_empty(self, tmp_path: Path):
+        """Empty directories produce empty errors set."""
+        a = tmp_path / "a"
+        b = tmp_path / "b"
+        a.mkdir()
+        b.mkdir()
+        result = komparu.compare_dir(str(a), str(b))
+        assert result.errors == set()
+
+    def test_permission_denied_dir_in_errors(self, make_dir):
+        """A subdirectory with no permissions appears in errors."""
+        a = make_dir("a", {
+            "readable.txt": b"hello",
+            "restricted/inner.txt": b"inside",
+        })
+        b = make_dir("b", {
+            "readable.txt": b"hello",
+        })
+        restricted = a / "restricted"
+        restricted.chmod(0o000)
+        try:
+            result = komparu.compare_dir(str(a), str(b))
+            # The restricted dir should appear in errors
+            assert "restricted" in result.errors
+            # inner.txt should NOT appear in only_left (dir couldn't be opened)
+            assert "restricted/inner.txt" not in result.only_left
+            # readable.txt should still be compared normally
+            assert "readable.txt" not in result.diff
+        finally:
+            restricted.chmod(0o755)
+
+    def test_permission_denied_dir_both_sides(self, make_dir):
+        """Permission errors from directories on both sides are collected."""
+        a = make_dir("a", {
+            "common.txt": b"data",
+            "noaccess_a/file.txt": b"restricted",
+        })
+        b = make_dir("b", {
+            "common.txt": b"data",
+            "noaccess_b/file.txt": b"restricted",
+        })
+        (a / "noaccess_a").chmod(0o000)
+        (b / "noaccess_b").chmod(0o000)
+        try:
+            result = komparu.compare_dir(str(a), str(b))
+            assert "noaccess_a" in result.errors
+            assert "noaccess_b" in result.errors
+        finally:
+            (a / "noaccess_a").chmod(0o755)
+            (b / "noaccess_b").chmod(0o755)
+
+    def test_permission_denied_readable_files_still_compared(self, make_dir):
+        """Readable files are still compared even when a dir has no permissions."""
+        a = make_dir("a", {
+            "good.txt": b"identical",
+            "restricted/inner.txt": b"hidden",
+        })
+        b = make_dir("b", {
+            "good.txt": b"identical",
+        })
+        (a / "restricted").chmod(0o000)
+        try:
+            result = komparu.compare_dir(str(a), str(b))
+            assert "restricted" in result.errors
+            assert "good.txt" not in result.diff
+        finally:
+            (a / "restricted").chmod(0o755)
+
+    def test_fstatat_permission_denied_via_symlink(self, make_dir, tmp_path: Path):
+        """fstatat EACCES when following a symlink through a restricted dir."""
+        # Create a target directory with a file
+        target_dir = tmp_path / "target"
+        target_dir.mkdir()
+        (target_dir / "secret.txt").write_bytes(b"secret")
+
+        # Create dir_a with a symlink to target/secret.txt
+        a = make_dir("a", {"readable.txt": b"hello"})
+        (a / "link.txt").symlink_to(target_dir / "secret.txt")
+
+        b = make_dir("b", {"readable.txt": b"hello"})
+
+        # Now remove permissions from target directory
+        # fstatat with follow_symlinks=True will fail with EACCES
+        target_dir.chmod(0o000)
+        try:
+            result = komparu.compare_dir(str(a), str(b), follow_symlinks=True)
+            # link.txt should appear in errors (fstatat EACCES)
+            assert "link.txt" in result.errors
+            # readable.txt should still be compared normally
+            assert "readable.txt" not in result.diff
+        finally:
+            target_dir.chmod(0o755)

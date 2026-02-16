@@ -86,6 +86,10 @@ typedef struct komparu_dir_result {
     char **only_right;
     size_t only_right_count;
     size_t only_right_cap;
+
+    char **errors;
+    size_t error_count;
+    size_t error_cap;
 } komparu_dir_result_t;
 
 komparu_dir_result_t *komparu_dir_result_new(void);
@@ -94,5 +98,6 @@ void komparu_dir_result_free(komparu_dir_result_t *result);
 int komparu_dir_result_add_diff(komparu_dir_result_t *r, const char *path, int reason);
 int komparu_dir_result_add_only_left(komparu_dir_result_t *r, const char *path);
 int komparu_dir_result_add_only_right(komparu_dir_result_t *r, const char *path);
+int komparu_dir_result_add_error(komparu_dir_result_t *r, const char *path);
 
 #endif /* KOMPARU_COMPARE_H */
