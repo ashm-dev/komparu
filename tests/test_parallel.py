@@ -159,6 +159,12 @@ class TestCompareAll:
             paths.append(str(p))
         assert komparu.compare_all(paths, max_workers=1) is True
 
+    def test_same_path_repeated(self, tmp_path: Path):
+        """All entries point to the same file → inode short-circuit."""
+        p = tmp_path / "only.bin"
+        p.write_bytes(b"data")
+        assert komparu.compare_all([str(p), str(p), str(p)]) is True
+
 
 # =========================================================================
 # compare_many
@@ -236,6 +242,14 @@ class TestCompareMany:
             paths.append(str(p))
         result = komparu.compare_many(paths, max_workers=4)
         assert result.all_equal is True
+
+    def test_same_path_repeated(self, tmp_path: Path):
+        """All entries are the same file → inode short-circuit on every pair."""
+        p = tmp_path / "only.txt"
+        p.write_bytes(b"data")
+        result = komparu.compare_many([str(p), str(p), str(p)])
+        assert result.all_equal is True
+        assert len(result.groups) == 1
 
 
 # =========================================================================

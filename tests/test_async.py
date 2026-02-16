@@ -71,6 +71,31 @@ class TestAsyncCompare:
         assert await komparu.aio.compare(str(a), str(b)) is True
 
     @pytest.mark.asyncio
+    async def test_same_file(self, tmp_path: Path):
+        """Same path → inode short-circuit."""
+        a = tmp_path / "a.bin"
+        a.write_bytes(b"data")
+        assert await komparu.aio.compare(str(a), str(a)) is True
+
+    @pytest.mark.asyncio
+    async def test_hard_link(self, tmp_path: Path):
+        """Hard link → same inode → instant True."""
+        a = tmp_path / "a.bin"
+        a.write_bytes(b"hardlink_data")
+        link = tmp_path / "link.bin"
+        os.link(str(a), str(link))
+        assert await komparu.aio.compare(str(a), str(link)) is True
+
+    @pytest.mark.asyncio
+    async def test_symlink_to_file(self, tmp_path: Path):
+        """Symlink → same inode → instant True."""
+        a = tmp_path / "a.bin"
+        a.write_bytes(b"symlink_data")
+        link = tmp_path / "link.bin"
+        link.symlink_to(a)
+        assert await komparu.aio.compare(str(a), str(link)) is True
+
+    @pytest.mark.asyncio
     async def test_file_not_found(self, tmp_path: Path):
         a = tmp_path / "a.bin"
         a.write_bytes(b"data")
@@ -139,6 +164,30 @@ def make_dir(tmp_path: Path):
 
 
 class TestAsyncCompareDir:
+    @pytest.mark.asyncio
+    async def test_same_dir(self, make_dir):
+        """Same directory path → realpath short-circuit."""
+        a = make_dir("a", {"file.txt": b"data"})
+        result = await komparu.aio.compare_dir(str(a), str(a))
+        assert result.equal is True
+        assert result.diff == {}
+
+    @pytest.mark.asyncio
+    async def test_symlink_to_dir(self, make_dir, tmp_path: Path):
+        """Symlink to same dir → realpath resolves → equal."""
+        a = make_dir("a", {"file.txt": b"data"})
+        link = tmp_path / "link_dir"
+        link.symlink_to(a)
+        result = await komparu.aio.compare_dir(str(a), str(link))
+        assert result.equal is True
+
+    @pytest.mark.asyncio
+    async def test_trailing_slash(self, make_dir):
+        """Trailing slash → realpath normalizes."""
+        a = make_dir("a", {"file.txt": b"data"})
+        result = await komparu.aio.compare_dir(str(a), str(a) + "/")
+        assert result.equal is True
+
     @pytest.mark.asyncio
     async def test_identical_dirs(self, make_dir):
         files = {f"file_{i}.txt": os.urandom(200) for i in range(10)}
@@ -214,6 +263,34 @@ def make_zip(tmp_path: Path):
 
 class TestAsyncCompareArchive:
     """Async archive comparison tests mirroring test_compare_archive.py."""
+
+    # --- Same archive short-circuit ---
+
+    @pytest.mark.asyncio
+    async def test_same_archive(self, make_tar):
+        """Same archive path → inode short-circuit."""
+        a = make_tar("a.tar.gz", {"file.txt": b"data"})
+        result = await komparu.aio.compare_archive(str(a), str(a))
+        assert result.equal is True
+        assert result.diff == {}
+
+    @pytest.mark.asyncio
+    async def test_symlink_to_archive(self, make_tar, tmp_path: Path):
+        """Symlink to same archive → inode match → equal."""
+        a = make_tar("a.tar.gz", {"file.txt": b"data"})
+        link = tmp_path / "link.tar.gz"
+        link.symlink_to(a)
+        result = await komparu.aio.compare_archive(str(a), str(link))
+        assert result.equal is True
+
+    @pytest.mark.asyncio
+    async def test_hard_link_to_archive(self, make_tar, tmp_path: Path):
+        """Hard link to same archive → inode match → equal."""
+        a = make_tar("a.tar.gz", {"file.txt": b"data"})
+        link = tmp_path / "hardlink.tar.gz"
+        os.link(str(a), str(link))
+        result = await komparu.aio.compare_archive(str(a), str(link))
+        assert result.equal is True
 
     # --- Identical archives ---
 
@@ -431,6 +508,13 @@ class TestAsyncCompareAll:
     async def test_empty(self):
         assert await komparu.aio.compare_all([]) is True
 
+    @pytest.mark.asyncio
+    async def test_same_path_repeated(self, tmp_path: Path):
+        """All entries are same file → inode short-circuit."""
+        p = tmp_path / "only.bin"
+        p.write_bytes(b"data")
+        assert await komparu.aio.compare_all([str(p), str(p), str(p)]) is True
+
 
 # =========================================================================
 # compare_many — async
@@ -475,6 +559,15 @@ class TestAsyncCompareMany:
         assert len(result.groups) == 2
         sizes = sorted(len(g) for g in result.groups)
         assert sizes == [1, 2]
+
+    @pytest.mark.asyncio
+    async def test_same_path_repeated(self, tmp_path: Path):
+        """All entries are same file → inode short-circuit on every pair."""
+        p = tmp_path / "only.txt"
+        p.write_bytes(b"data")
+        result = await komparu.aio.compare_many([str(p), str(p), str(p)])
+        assert result.all_equal is True
+        assert len(result.groups) == 1
 
 
 # =========================================================================

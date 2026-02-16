@@ -57,6 +57,13 @@ class TestCompareIdentical:
         a = make_file("a.txt", b"data")
         assert komparu.compare(str(a), str(a)) is True
 
+    def test_hard_link(self, make_file, tmp_dir):
+        """Hard link to same inode should return True instantly."""
+        a = make_file("a.txt", b"hard_link_data")
+        link = tmp_dir / "hardlink.txt"
+        os.link(str(a), str(link))
+        assert komparu.compare(str(a), str(link)) is True
+
 
 class TestCompareDifferent:
     """Two different files should return False."""
@@ -208,3 +215,138 @@ class TestCompareOptions:
             size_precheck=False,
             quick_check=False,
         ) is True
+
+
+# ---- New tests: Unicode file paths ----
+
+
+class TestUnicodeFilePaths:
+    """File comparison with Unicode characters in file names."""
+
+    def test_cyrillic_filename_identical(self, make_file):
+        """Cyrillic filenames with identical content."""
+        content = b"cyrillic file content"
+        a = make_file("\u0444\u0430\u0439\u043b_a.txt", content)
+        b = make_file("\u0444\u0430\u0439\u043b_b.txt", content)
+        assert komparu.compare(str(a), str(b)) is True
+
+    def test_cyrillic_filename_different(self, make_file):
+        """Cyrillic filenames with different content."""
+        a = make_file("\u0444\u0430\u0439\u043b_a.txt", b"alpha")
+        b = make_file("\u0444\u0430\u0439\u043b_b.txt", b"bravo")
+        assert komparu.compare(str(a), str(b)) is False
+
+    def test_chinese_filename_identical(self, make_file):
+        """Chinese filenames with identical content."""
+        content = b"chinese file content"
+        a = make_file("\u6587\u4ef6_a.txt", content)
+        b = make_file("\u6587\u4ef6_b.txt", content)
+        assert komparu.compare(str(a), str(b)) is True
+
+    def test_chinese_filename_different(self, make_file):
+        """Chinese filenames with different content."""
+        a = make_file("\u6587\u4ef6_a.txt", b"one")
+        b = make_file("\u6587\u4ef6_b.txt", b"two")
+        assert komparu.compare(str(a), str(b)) is False
+
+    def test_japanese_filename(self, make_file):
+        """Japanese (katakana) filenames."""
+        content = b"japanese content"
+        a = make_file("\u30c6\u30b9\u30c8_a.dat", content)
+        b = make_file("\u30c6\u30b9\u30c8_b.dat", content)
+        assert komparu.compare(str(a), str(b)) is True
+
+    def test_emoji_filename(self, make_file):
+        """Emoji in filenames."""
+        content = b"emoji content"
+        a = make_file("\U0001f4c4_a.txt", content)
+        b = make_file("\U0001f4c4_b.txt", content)
+        assert komparu.compare(str(a), str(b)) is True
+
+    def test_accented_latin_filename(self, make_file):
+        """Accented Latin filenames (French, German)."""
+        content = b"accented content"
+        a = make_file("r\u00e9sum\u00e9_a.txt", content)
+        b = make_file("r\u00e9sum\u00e9_b.txt", content)
+        assert komparu.compare(str(a), str(b)) is True
+
+    def test_unicode_in_subdirectory(self, make_file):
+        """Unicode characters in parent directory name."""
+        content = b"nested unicode"
+        a = make_file("\u043f\u0430\u043f\u043a\u0430/a.txt", content)
+        b = make_file("\u043f\u0430\u043f\u043a\u0430/b.txt", content)
+        assert komparu.compare(str(a), str(b)) is True
+
+    def test_same_unicode_file(self, make_file):
+        """Comparing a Unicode-named file with itself."""
+        a = make_file("\u0444\u0430\u0439\u043b.txt", b"self compare")
+        assert komparu.compare(str(a), str(a)) is True
+
+
+# ---- New tests: Special character file paths ----
+
+
+class TestSpecialCharFilePaths:
+    """File comparison with special characters in file names."""
+
+    def test_spaces_identical(self, make_file):
+        """Files with spaces, identical content."""
+        content = b"space content"
+        a = make_file("my file a.txt", content)
+        b = make_file("my file b.txt", content)
+        assert komparu.compare(str(a), str(b)) is True
+
+    def test_spaces_different(self, make_file):
+        """Files with spaces, different content."""
+        a = make_file("my file a.txt", b"version 1")
+        b = make_file("my file b.txt", b"version 2")
+        assert komparu.compare(str(a), str(b)) is False
+
+    def test_parentheses(self, make_file):
+        """Files with parentheses in names."""
+        content = b"paren content"
+        a = make_file("file (1).txt", content)
+        b = make_file("file (2).txt", content)
+        assert komparu.compare(str(a), str(b)) is True
+
+    def test_brackets(self, make_file):
+        """Files with square brackets."""
+        content = b"bracket content"
+        a = make_file("data[a].json", content)
+        b = make_file("data[b].json", content)
+        assert komparu.compare(str(a), str(b)) is True
+
+    def test_single_quotes(self, make_file):
+        """Files with single quotes in names."""
+        content = b"quote content"
+        a = make_file("it's_a.txt", content)
+        b = make_file("it's_b.txt", content)
+        assert komparu.compare(str(a), str(b)) is True
+
+    def test_hash_sign(self, make_file):
+        """Files with # in names."""
+        content = b"hash content"
+        a = make_file("issue#1_a.txt", content)
+        b = make_file("issue#1_b.txt", content)
+        assert komparu.compare(str(a), str(b)) is True
+
+    def test_at_sign(self, make_file):
+        """Files with @ in names."""
+        content = b"at content"
+        a = make_file("user@host_a.txt", content)
+        b = make_file("user@host_b.txt", content)
+        assert komparu.compare(str(a), str(b)) is True
+
+    def test_exclamation(self, make_file):
+        """Files with ! in names."""
+        content = b"bang content"
+        a = make_file("alert!_a.txt", content)
+        b = make_file("alert!_b.txt", content)
+        assert komparu.compare(str(a), str(b)) is True
+
+    def test_special_chars_in_subdir(self, make_file):
+        """Special characters in parent directory name."""
+        content = b"subdir special"
+        a = make_file("dir with spaces/a.txt", content)
+        b = make_file("dir with spaces/b.txt", content)
+        assert komparu.compare(str(a), str(b)) is True
