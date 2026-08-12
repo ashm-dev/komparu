@@ -1,3 +1,5 @@
+
+
 **English** | [Русский](README.ru.md)
 
 # komparu
@@ -74,7 +76,7 @@ result = await komparu.aio.compare_dir("/dir_a", "/dir_b")
 result = await komparu.aio.compare_archive("a.tar.gz", "b.tar.gz")
 all_same = await komparu.aio.compare_all(["f1", "f2", "f3"])
 result = await komparu.aio.compare_many(["f1", "f2", "f3"])
-result = await komparu.aio.compare_dir_urls("/dir", url_map)
+result = await komparu.aio.compare_dir_urls("/dir", {"file.txt": "https://example.com/file.txt"})
 ```
 
 The async API uses C threads + eventfd/pipe integrated with `asyncio.loop.add_reader()`. No Python threads, no GIL contention, no stack overhead.
